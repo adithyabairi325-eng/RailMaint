@@ -1,0 +1,627 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* ============================================================
+   Login.css — Railway Maintenance AI
+   Scoped to .login-* and .form-* to avoid conflicts with
+   existing dashboard components.
+   ============================================================ */
+
+/*
+ * Override default Vite index.css #root container
+ * Keep it full viewport width and prevent awkward vertical
+ * scrollbars on laptop/desktop displays.
+ */
+#root:has(.login-page) {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  border-inline: none !important;
+  text-align: left !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+}
+
+/* ── Reset & Base ── */
+.login-page *,
+.login-page *::before,
+.login-page *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Page Shell ── */
+.login-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: #FFFBF7;
+  color: #111827;
+  position: relative;
+}
+
+/* Subtle decorative circles */
+.login-page::before {
+  content: '';
+  position: absolute;
+  top: -120px;
+  left: -120px;
+  width: 440px;
+  height: 440px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(249,115,22,0.07) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.login-page::after {
+  content: '';
+  position: absolute;
+  bottom: -100px;
+  right: -100px;
+  width: 380px;
+  height: 380px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(249,115,22,0.06) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* ============================================================
+   TOP BAR (Brand anchored at top left corner)
+   ============================================================ */
+.login-topbar {
+  padding: 22px 44px 0;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-brand-icon {
+  flex-shrink: 0;
+  line-height: 0;
+  display: flex;
+}
+
+.login-brand-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+  letter-spacing: -0.01em;
+}
+
+/* ============================================================
+   MAIN CONTENT AREA
+   ============================================================ */
+.login-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(32px, 4.5vw, 64px);
+  padding: 8px 44px 20px;
+  max-width: 1240px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  z-index: 1;
+  min-height: 0; /* Prevents flex overflow */
+}
+
+/* ============================================================
+   LEFT PANEL (Big & Fills Vertical Space)
+   ============================================================ */
+.login-left {
+  flex: 1 1 660px;
+  max-width: 720px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.login-left-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+}
+
+/* Tagline block */
+.login-tagline-headline {
+  font-size: clamp(26px, 2.7vw, 36px);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  color: #111827;
+  margin-bottom: 6px;
+}
+
+.login-tagline-body {
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: #4B5563;
+  max-width: 620px;
+}
+
+/* ── Meaningful Railway Simulation Showcase ── */
+.login-illustration-wrap {
+  width: 100%;
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(249,115,22,0.07);
+}
+
+.sim-container {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border-radius: 18px;
+  border: 1.5px solid #F3E8D8;
+  overflow: hidden;
+}
+
+.sim-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 16px;
+  background: #FFFDFB;
+  border-bottom: 1px solid #F6EADE;
+}
+
+.sim-live-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #C2410C;
+  letter-spacing: 0.03em;
+}
+
+.sim-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10B981;
+  box-shadow: 0 0 6px #10B981;
+  animation: pulseDot 1.8s infinite;
+}
+
+@keyframes pulseDot {
+  0% { transform: scale(0.9); opacity: 0.7; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.7; }
+}
+
+.sim-status-pills {
+  display: flex;
+  gap: 8px;
+}
+
+.sim-pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.02em;
+}
+
+.sim-pill.alert {
+  background: #FEF2F2;
+  color: #B91C1C;
+  border: 1px solid #FECACA;
+}
+
+.sim-pill.success {
+  background: #ECFDF5;
+  color: #047857;
+  border: 1px solid #A7F3D0;
+}
+
+.railway-illustration {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 240px;
+}
+
+/* Realistic Train Subtle Cruising Animation */
+@keyframes trainCruising {
+  0% { transform: translate(200px, 138px); }
+  50% { transform: translate(250px, 138px); }
+  100% { transform: translate(200px, 138px); }
+}
+
+.realistic-train-group {
+  animation: trainCruising 6s ease-in-out infinite;
+}
+
+.sim-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: #FFFDFB;
+  border-top: 1px solid #F6EADE;
+  font-size: 11px;
+  color: #4B5563;
+}
+
+.sim-footer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sim-footer-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.sim-footer-dot.red {
+  background: #EF4444;
+}
+
+.sim-footer-dot.green {
+  background: #10B981;
+}
+
+/* ── PRD Feature Cards (Fills vertical height cleanly) ── */
+.login-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.feature-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1.5px solid #F3E8D8;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.feature-card:hover {
+  transform: translateY(-2px);
+  border-color: #F97316;
+  box-shadow: 0 4px 12px rgba(249,115,22,0.12);
+}
+
+.feature-card-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.feature-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.feature-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #111827;
+  letter-spacing: -0.01em;
+}
+
+.feature-desc {
+  font-size: 10.5px;
+  color: #6B7280;
+  line-height: 1.3;
+}
+
+/* ============================================================
+   RIGHT PANEL (Compact & Sleek Card)
+   ============================================================ */
+.login-right {
+  flex: 0 0 350px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Login Card ── */
+.login-card {
+  width: 350px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #FFF8F2;
+  border-radius: 24px;
+  border: 1.5px solid rgba(249,115,22,0.14);
+  box-shadow:
+    0 18px 48px rgba(249,115,22,0.09),
+    0 4px 16px rgba(0,0,0,0.05);
+  padding: 24px 26px 20px;
+}
+
+/* Logo accent */
+.login-logo {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+
+.login-logo-ring {
+  line-height: 0;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(249,115,22,0.14);
+}
+
+/* Titles */
+.login-title {
+  font-size: 23px;
+  font-weight: 800;
+  color: #111827;
+  letter-spacing: -0.03em;
+  margin-bottom: 4px;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  color: #6B7280;
+  line-height: 1.4;
+  margin-bottom: 18px;
+}
+
+/* ── Form ── */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #374151;
+  letter-spacing: 0.01em;
+}
+
+.form-input {
+  width: 100%;
+  padding: 9.5px 13px;
+  border: 1.5px solid #E5E7EB;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-family: inherit;
+  color: #111827;
+  background: #ffffff;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.form-input::placeholder {
+  color: #9CA3AF;
+}
+
+.form-input:focus {
+  border-color: #F97316;
+  box-shadow: 0 0 0 3px rgba(249,115,22,0.12);
+}
+
+/* Password wrapper */
+.password-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-wrapper .form-input {
+  padding-right: 42px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9CA3AF;
+  border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.password-toggle:hover {
+  color: #F97316;
+  background: rgba(249,115,22,0.08);
+}
+
+/* Role select */
+.select-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.role-select {
+  width: 100%;
+  padding: 9.5px 36px 9.5px 13px;
+  border: 1.5px solid #E5E7EB;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-family: inherit;
+  color: #111827;
+  background: #ffffff;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.role-select:focus {
+  border-color: #F97316;
+  box-shadow: 0 0 0 3px rgba(249,115,22,0.12);
+}
+
+.select-chevron {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  color: #9CA3AF;
+}
+
+/* Login button */
+.login-button {
+  width: 100%;
+  padding: 11px;
+  background: #F97316;
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  font-size: 14.5px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  margin-top: 2px;
+  transition: background 0.18s ease, transform 0.12s ease, box-shadow 0.18s ease;
+  box-shadow: 0 4px 12px rgba(249,115,22,0.28);
+}
+
+.login-button:hover {
+  background: #EA6C0A;
+  box-shadow: 0 6px 18px rgba(249,115,22,0.36);
+  transform: translateY(-1px);
+}
+
+.login-button:active {
+  background: #D9620A;
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(249,115,22,0.22);
+}
+
+
+/* Hint text below button */
+.login-hint {
+  text-align: center;
+  font-size: 11.5px;
+  color: #9CA3AF;
+  line-height: 1.4;
+  margin-top: -2px;
+}
+
+/* ============================================================
+   RESPONSIVE (Tablet & Mobile: Allow natural scroll)
+   ============================================================ */
+
+@media (max-width: 960px), (max-height: 640px) {
+  #root:has(.login-page) {
+    height: auto !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+  }
+
+  .login-page {
+    height: auto;
+    min-height: 100vh;
+    max-height: none;
+    overflow-y: auto;
+  }
+
+  .login-topbar {
+    padding: 20px 20px 0;
+    justify-content: flex-start;
+  }
+
+  .login-main {
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 32px;
+    padding: 20px 20px 40px;
+    max-width: 540px;
+  }
+
+  .login-left {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .login-left-content {
+    align-items: center;
+    text-align: center;
+    gap: 16px;
+  }
+
+  .login-tagline-body {
+    max-width: 100%;
+  }
+
+  .login-feature-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .login-right {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .login-card {
+    width: 100%;
+    max-width: 380px;
+  }
+}
+
+/* Mobile */
+@media (max-width: 520px) {
+  .login-topbar {
+    padding: 16px 16px 0;
+  }
+
+  .login-main {
+    padding: 16px 16px 36px;
+    gap: 24px;
+  }
+
+  .login-card {
+    border-radius: 20px;
+    padding: 22px 18px 20px;
+  }
+
+  .login-tagline-headline {
+    font-size: 22px;
+  }
+
+  .login-title {
+    font-size: 21px;
+  }
+}
