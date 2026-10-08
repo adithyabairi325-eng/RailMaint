@@ -353,22 +353,68 @@ function Login({ onLoginSuccess }) {
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('admin');
   const [showPassword, setShowPassword] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const getFriendlyErrorMessage = (error) => {
+    if (!error) return 'An unexpected error occurred. Please try again.';
+    switch (error.code) {
+      case 'auth/invalid-email':
+        return 'Please enter a valid email address.';
+      case 'auth/user-not-found':
+        return 'No registered account found with this email.';
+      case 'auth/wrong-password':
+        return 'Incorrect password. Please try again.';
+      case 'auth/invalid-credential':
+        return 'Invalid email or password. Please verify your credentials.';
+      case 'auth/user-disabled':
+        return 'This account has been disabled. Please contact your administrator.';
+      case 'auth/too-many-requests':
+        return 'Too many failed login attempts. Please try again in a few moments.';
+      case 'auth/network-request-failed':
+        return 'Network connection issue. Please check your internet connection.';
+      default:
+        return error.message || 'Authentication failed. Please verify your credentials.';
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setErrorMessage('');
 
-    try {
-      if (auth && email && password) {
-        await signInWithEmailAndPassword(auth, email.trim(), password);
-        console.log("Firebase login successful");
-      }
-    } catch (error) {
-      console.warn("Firebase sign-in note:", error.message);
+    const trimmedEmail = email.trim();
+
+    // 1. Mandatory input validation
+    if (!trimmedEmail) {
+      setErrorMessage('Please enter your email address.');
+      return;
     }
 
-    // Navigate to the selected role dashboard
-    if (onLoginSuccess) {
-      onLoginSuccess(role);
+    if (!password) {
+      setErrorMessage('Please enter your password.');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      if (!auth) {
+        throw new Error('Firebase Auth is not initialized.');
+      }
+
+      // 2. Perform Firebase Authentication
+      const userCredential = await signInWithEmailAndPassword(auth, trimmedEmail, password);
+      console.log('Firebase login successful:', userCredential.user.email);
+
+      // 3. Navigate to the selected role dashboard ONLY upon verified authentication
+      if (onLoginSuccess) {
+        onLoginSuccess({ ...userCredential.user, role }, role);
+      }
+    } catch (error) {
+      console.error('Firebase sign-in error:', error);
+      setErrorMessage(getFriendlyErrorMessage(error));
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -380,11 +426,11 @@ function Login({ onLoginSuccess }) {
           <div className="login-brand-icon" aria-hidden="true">
             <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
               <rect width="28" height="28" rx="7" fill="#F97316" />
-              <path d="M6 20 L14 8 L22 20" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-              <line x1="9" y1="16" x2="19" y2="16" stroke="white" strokeWidth="2.2" strokeLinecap="round" />
+              <path d="M 8.5 20 L 8.5 8 L 14 8 C 17.5 8 19 9.3 19 11.5 C 19 13.7 17.5 15 14 15 L 8.5 15" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              <path d="M 13.5 15 L 19 20" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
             </svg>
           </div>
-          <span className="login-brand-name">Railway Maintenance AI</span>
+          <span className="login-brand-name">RailMaint</span>
         </div>
       </header>
 
@@ -445,28 +491,44 @@ function Login({ onLoginSuccess }) {
               <div className="login-logo-ring" aria-hidden="true">
                 <svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <rect width="44" height="44" rx="14" fill="#FFF7ED" />
-                  <path d="M10 32 L22 12 L34 32" stroke="#F97316" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                  <line x1="15" y1="26" x2="29" y2="26" stroke="#F97316" strokeWidth="3" strokeLinecap="round" />
+                  <path d="M 14 32 L 14 12 L 22.5 12 C 28 12 30.5 14 30.5 17.5 C 30.5 21 28 23 22.5 23 L 14 23" stroke="#F97316" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                  <path d="M 22 23 L 30.5 32" stroke="#F97316" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
                 </svg>
               </div>
             </div>
 
             <h2 className="login-title">Welcome Back</h2>
-            <p className="login-subtitle">Sign in to continue to Railway Maintenance AI</p>
+            <p className="login-subtitle">Sign in to continue to RailMaint</p>
 
             <form className="login-form" onSubmit={handleSubmit} noValidate>
+              {errorMessage && (
+                <div className="login-error-alert" role="alert">
+                  <svg className="login-error-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  <span className="login-error-text">{errorMessage}</span>
+                </div>
+              )}
+
               <div className="form-group">
                 <label className="form-label" htmlFor="login-email">
                   Email / Employee ID
                 </label>
                 <input
                   id="login-email"
-                  type="text"
+                  type="email"
                   className="form-input"
                   placeholder="Enter your email or employee ID"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (errorMessage) setErrorMessage('');
+                  }}
                   autoComplete="username"
+                  disabled={isLoading}
                 />
               </div>
 
@@ -481,14 +543,19 @@ function Login({ onLoginSuccess }) {
                     className="form-input"
                     placeholder="Enter your password"
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (errorMessage) setErrorMessage('');
+                    }}
                     autoComplete="current-password"
+                    disabled={isLoading}
                   />
                   <button
                     type="button"
                     className="password-toggle"
                     onClick={() => setShowPassword((prev) => !prev)}
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    disabled={isLoading}
                   >
                     {showPassword ? <EyeOffIcon /> : <EyeIcon />}
                   </button>
@@ -505,6 +572,7 @@ function Login({ onLoginSuccess }) {
                     className="role-select"
                     value={role}
                     onChange={(e) => setRole(e.target.value)}
+                    disabled={isLoading}
                   >
                     {ROLES.map((r) => (
                       <option key={r.value} value={r.value}>
@@ -521,8 +589,15 @@ function Login({ onLoginSuccess }) {
                 </div>
               </div>
 
-              <button type="submit" className="login-button">
-                Login
+              <button type="submit" className="login-button" disabled={isLoading}>
+                {isLoading ? (
+                  <span className="login-button-content">
+                    <span className="btn-spinner" aria-hidden="true" />
+                    <span>Verifying credentials...</span>
+                  </span>
+                ) : (
+                  'Login'
+                )}
               </button>
 
               <p className="login-hint">

@@ -1,7 +1,12 @@
-export default function SignalDashboard({ onLogout }) {
+export default function SignalDashboard({ onLogout, user }) {
   return (
     <div style={{ padding: '40px', fontFamily: 'Inter, system-ui, sans-serif' }}>
       <h1>Signal & Telecom Dashboard</h1>
+      {user?.email && (
+        <p style={{ color: '#4B5563', marginTop: '8px', fontSize: '15px' }}>
+          Logged in as: <strong>{user.email}</strong> &bull; Role: <span style={{ color: '#F97316', fontWeight: '600' }}>Signal & Telecom</span>
+        </p>
+      )}
       {onLogout && (
         <button
           onClick={onLogout}
