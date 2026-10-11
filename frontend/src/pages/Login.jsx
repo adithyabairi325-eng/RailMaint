@@ -402,16 +402,44 @@ function Login({ onLoginSuccess }) {
         throw new Error('Firebase Auth is not initialized.');
       }
 
-      // 2. Perform Firebase Authentication
+      // Firebase checks the credentials; the backend verifies the signed-in identity.
       const userCredential = await signInWithEmailAndPassword(auth, trimmedEmail, password);
-      console.log('Firebase login successful:', userCredential.user.email);
+      const idToken = await userCredential.user.getIdToken();
+      const response = await fetch('/api/auth/me', {
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      });
 
-      // 3. Navigate to the selected role dashboard ONLY upon verified authentication
+      const responseBody = await response.text();
+      let result = {};
+
+      if (responseBody.trim()) {
+        try {
+          result = JSON.parse(responseBody);
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) {
+            throw error;
+          }
+          throw new Error(`The backend returned an invalid response (HTTP ${response.status}).`);
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          result?.error || `The backend could not verify your sign-in (HTTP ${response.status}).`,
+        );
+      }
+
+      if (!result?.uid) {
+        throw new Error('The backend did not return a verified user.');
+      }
+
       if (onLoginSuccess) {
         onLoginSuccess({ ...userCredential.user, role }, role);
       }
     } catch (error) {
-      console.error('Firebase sign-in error:', error);
+      console.error('Login failed:', error);
       setErrorMessage(getFriendlyErrorMessage(error));
     } finally {
       setIsLoading(false);

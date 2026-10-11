@@ -1,16 +1,27 @@
-# React + Vite
+# RailMaint development
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+## Start the app
 
-Currently, two official plugins are available:
+Firebase Authentication checks the test email and password. After sign-in, the
+frontend sends the Firebase ID token to Express, and Express verifies it with
+Firebase Admin before allowing the login flow to continue. The password is not
+sent to Express.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Run the frontend and backend in separate terminals from the repository root:
 
-## React Compiler
+```powershell
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```powershell
+$env:FIREBASE_PROJECT_ID = "railmaint-a716b"
+npm run dev:backend
+```
 
-## Expanding the Oxlint configuration
+The backend verifies Firebase ID tokens at `/api/auth/me`; it does not need to
+check passwords or use a health-check route for this login flow.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+The role selector currently controls dashboard navigation for testing only. It
+does not grant authorization. Before enforcing real roles, assign them using
+trusted server-side user data or Firebase custom claims; never trust the role
+selected in the browser.

@@ -1,8 +1,20 @@
-import expess from "express";
+import express from "express";
+import { initializeApp } from "firebase-admin/app";
+import authRoutes from "./routes/auth.js";
 
-const app = expess();
+const projectId = process.env.FIREBASE_PROJECT_ID;
 
-app.listen(3000, () => {
-  console.log("Server is running on port 3000");
+if (!projectId) {
+  throw new Error("Set FIREBASE_PROJECT_ID before starting the backend.");
+}
 
-})
+initializeApp({ projectId });
+
+const app = express();
+app.use("/api/auth", authRoutes);
+
+const port = Number(process.env.PORT ?? 3000);
+
+app.listen(port, () => {
+  console.log(`Backend listening on port ${port}`);
+});
