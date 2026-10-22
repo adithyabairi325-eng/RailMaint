@@ -1,8 +1,13 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import './AdminDashboard.css';
+import MaintenanceRequests from './MaintenanceRequests';
 
 export default function AdminDashboard({ onLogout, user }) {
   const containerRef = useRef(null);
+  const [activeTab, setActiveTab] = useState(() => {
+    const h = typeof window !== 'undefined' ? window.location.hash.slice(1) : '';
+    return h || 'dashboard';
+  });
 
   useEffect(() => {
     const root = containerRef.current;
@@ -1636,14 +1641,17 @@ export default function AdminDashboard({ onLogout, user }) {
     function render(keepScroll) {
       const k = route();
       currentRoute = k;
+      setActiveTab(k);
       root.querySelectorAll('#nav a').forEach((a) => {
         const on = a.dataset.k === k;
         a.classList.toggle('active', on);
         if (on) a.setAttribute('aria-current', 'page');
         else a.removeAttribute('aria-current');
       });
-      V.innerHTML = pages[k]();
-      mounts[k]?.();
+      if (k !== 'requests' && V) {
+        V.innerHTML = pages[k] ? pages[k]() : '';
+        mounts[k]?.();
+      }
       updateBell();
       if (keepScroll !== true) {
         window.scrollTo(0, 0);
@@ -1659,7 +1667,11 @@ export default function AdminDashboard({ onLogout, user }) {
     };
     $('#scrim').onclick = () => appEl.classList.remove('nav-open');
 
-    const handleHash = () => render();
+    const handleHash = () => {
+      const k = window.location.hash.slice(1) || 'dashboard';
+      setActiveTab(k);
+      render();
+    };
     window.addEventListener('hashchange', handleHash);
 
     const handleClick = (e) => {
@@ -1825,7 +1837,12 @@ export default function AdminDashboard({ onLogout, user }) {
               </div>
             </div>
           </header>
-          <main className="page" id="view"></main>
+          <main className="page" id="view" style={{ display: activeTab === 'requests' ? 'none' : '' }}></main>
+          {activeTab === 'requests' && (
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              <MaintenanceRequests user={user} onLogout={onLogout} />
+            </div>
+          )}
         </div>
       </div>
       <div className="layer" id="pl">

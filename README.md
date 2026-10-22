@@ -122,8 +122,10 @@ npm run setup:admin -- --email adhi123@gmail.com --uid 0lR65ji0uwWZ1mM0sCmzg6x0X
 | **`backend/index.js`** | Main entry point for the Express backend. Loads `.env`, initializes Firebase Admin SDK, connects to MongoDB Atlas, and mounts API routes. Contains no destructive file deletion code. |
 | **`backend/db.js`** | Database connection manager. Uses Mongoose to connect directly to MongoDB Atlas. Validates that `MONGODB_URI` is present and does not allow localhost fallback. |
 | **`backend/models/User.js`** | Mongoose User model schema. Enforces required fields (`firebaseUid`, `email`, single `role`, `status`). Passwords are never stored here. |
+| **`backend/models/MaintenanceRequest.js`** | Mongoose schema and model for maintenance requests. Tracks asset category, location, department, issue type, description, priority, estimated duration, resources, preferred date/time, status, creator identity, and status history. |
 | **`backend/middleware/auth.js`** | Express middleware providing `authenticateToken` (verifies Firebase ID token & loads MongoDB user) and `requireRole` (restricts endpoints to authorized roles like `admin`). |
 | **`backend/routes/auth.js`** | The `/api/auth/me` endpoint. Verifies incoming Firebase tokens, queries MongoDB Atlas for the user's role, enforces role consistency with `x-selected-role`, and returns the authorized profile. Also provides `/api/auth/admin-only` for route authorization testing. |
+| **`backend/routes/maintenanceRequests.js`** | REST endpoints (`POST /api/maintenance-requests`, `GET /api/maintenance-requests`, `GET /:id`, `PATCH /:id/status`) with token verification, department scoping, input validation, and role-based status transition enforcement. |
 | **`backend/routes/schedules.js`** | Protected REST API endpoint for maintenance schedules. Requires valid authentication for `/` and admin privileges for `/admin`. |
 | **`backend/scripts/setupAdmin.js`** | Controlled provisioning script. Safely creates or checks the initial `admin` role in MongoDB Atlas for your verified Firebase UID without exposing passwords or overwriting existing records. |
 
@@ -135,12 +137,14 @@ npm run setup:admin -- --email adhi123@gmail.com --uid 0lR65ji0uwWZ1mM0sCmzg6x0X
 | :--- | :--- |
 | **`frontend/src/firebase/firebaseConfig.js`** | Initializes the Firebase client app and exports `auth` for client-side email/password authentication. |
 | **`frontend/src/pages/Login.jsx`** | The login interface. Collects credentials and role selection, calls `signInWithEmailAndPassword`, sends the token and `x-selected-role` to `/api/auth/me`, and displays clear error messages if role mismatch or unauthorized. Performs clean `signOut(auth)` on rejection. |
+| **`frontend/src/pages/MaintenanceRequests.jsx`** | Comprehensive maintenance requests page featuring the 9-field submission form, real-time MongoDB Atlas table, department/priority/status filters, view details modal, and role-based status management. |
+| **`frontend/src/pages/MaintenanceRequests.css`** | Styling for the maintenance requests form, table, badges, modals, and responsive layout. |
 | **`frontend/src/App.jsx`** | Top-level state and routing. When login succeeds, receives the MongoDB-verified role and displays the matching dashboard. On logout, clears application state and executes `signOut(auth)`. |
-| **`frontend/src/pages/AdminDashboard.jsx`** | Cross-department maintenance scheduling, conflict detection, and timetable optimization for railway administrators. |
-| **`frontend/src/pages/EngineeringDashboard.jsx`** | Track maintenance, speed restriction planning, and structural inspection dashboard. |
-| **`frontend/src/pages/TractionDashboard.jsx`** | Overhead equipment (OHE), power isolations, and catenary maintenance coordination. |
-| **`frontend/src/pages/SignalDashboard.jsx`** | Interlocking, track circuit telemetry, point machine testing, and signal maintenance. |
-| **`frontend/src/pages/PassengerDashboard.jsx`** | Passenger disruption alerts, platform alterations, and journey advisory view. |
+| **`frontend/src/pages/AdminDashboard.jsx`** | Cross-department maintenance scheduling, conflict detection, and timetable optimization for railway administrators. Hosts live Maintenance Requests view on the `#requests` tab. |
+| **`frontend/src/pages/EngineeringDashboard.jsx`** | Track maintenance and inspection dashboard, rendering the live Maintenance Requests feature for the Engineering department. |
+| **`frontend/src/pages/TractionDashboard.jsx`** | Overhead equipment (OHE) and catenary maintenance dashboard, scoped to Traction/OHE maintenance requests. |
+| **`frontend/src/pages/SignalDashboard.jsx`** | Interlocking, track circuit telemetry, and signal maintenance dashboard, scoped to Signal & Telecom requests. |
+| **`frontend/src/pages/PassengerDashboard.jsx`** | Passenger disruption alerts, platform alterations, and read-only maintenance advisory view. |
 | **`frontend/vite.config.js`** | Vite configuration with `/api` reverse proxy forwarding requests to `http://localhost:3000`. |
 
 ---
