@@ -10,7 +10,6 @@ const userSchema = new mongoose.Schema(
       required: [true, "firebaseUid is required"],
       unique: true,
       trim: true,
-      index: true,
     },
     email: {
       type: String,

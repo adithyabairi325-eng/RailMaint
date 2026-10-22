@@ -137,14 +137,12 @@ npm run setup:admin -- --email adhi123@gmail.com --uid 0lR65ji0uwWZ1mM0sCmzg6x0X
 | :--- | :--- |
 | **`frontend/src/firebase/firebaseConfig.js`** | Initializes the Firebase client app and exports `auth` for client-side email/password authentication. |
 | **`frontend/src/pages/Login.jsx`** | The login interface. Collects credentials and role selection, calls `signInWithEmailAndPassword`, sends the token and `x-selected-role` to `/api/auth/me`, and displays clear error messages if role mismatch or unauthorized. Performs clean `signOut(auth)` on rejection. |
-| **`frontend/src/pages/MaintenanceRequests.jsx`** | Comprehensive maintenance requests page featuring the 9-field submission form, real-time MongoDB Atlas table, department/priority/status filters, view details modal, and role-based status management. |
-| **`frontend/src/pages/MaintenanceRequests.css`** | Styling for the maintenance requests form, table, badges, modals, and responsive layout. |
 | **`frontend/src/App.jsx`** | Top-level state and routing. When login succeeds, receives the MongoDB-verified role and displays the matching dashboard. On logout, clears application state and executes `signOut(auth)`. |
-| **`frontend/src/pages/AdminDashboard.jsx`** | Cross-department maintenance scheduling, conflict detection, and timetable optimization for railway administrators. Hosts live Maintenance Requests view on the `#requests` tab. |
-| **`frontend/src/pages/EngineeringDashboard.jsx`** | Track maintenance and inspection dashboard, rendering the live Maintenance Requests feature for the Engineering department. |
-| **`frontend/src/pages/TractionDashboard.jsx`** | Overhead equipment (OHE) and catenary maintenance dashboard, scoped to Traction/OHE maintenance requests. |
-| **`frontend/src/pages/SignalDashboard.jsx`** | Interlocking, track circuit telemetry, and signal maintenance dashboard, scoped to Signal & Telecom requests. |
-| **`frontend/src/pages/PassengerDashboard.jsx`** | Passenger disruption alerts, platform alterations, and read-only maintenance advisory view. |
+| **`frontend/src/pages/AdminDashboard.jsx`** | Cross-department maintenance scheduling, conflict detection, asset management, and timetable optimization for railway administrators. Maintenance requests are persisted directly to MongoDB Atlas via Express backend. |
+| **`frontend/src/pages/EngineeringDashboard.jsx`** | Track maintenance, speed restriction planning, and structural inspection dashboard. |
+| **`frontend/src/pages/TractionDashboard.jsx`** | Overhead equipment (OHE), power isolations, and catenary maintenance coordination. |
+| **`frontend/src/pages/SignalDashboard.jsx`** | Interlocking, track circuit telemetry, point machine testing, and signal maintenance. |
+| **`frontend/src/pages/PassengerDashboard.jsx`** | Passenger disruption alerts, platform alterations, and journey advisory view. |
 | **`frontend/vite.config.js`** | Vite configuration with `/api` reverse proxy forwarding requests to `http://localhost:3000`. |
 
 ---

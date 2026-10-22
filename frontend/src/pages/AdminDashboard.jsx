@@ -1,13 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import './AdminDashboard.css';
-import MaintenanceRequests from './MaintenanceRequests';
+import { auth } from '../firebase/firebaseConfig';
 
 export default function AdminDashboard({ onLogout, user }) {
   const containerRef = useRef(null);
-  const [activeTab, setActiveTab] = useState(() => {
-    const h = typeof window !== 'undefined' ? window.location.hash.slice(1) : '';
-    return h || 'dashboard';
-  });
 
   useEffect(() => {
     const root = containerRef.current;
@@ -260,17 +256,39 @@ export default function AdminDashboard({ onLogout, user }) {
         S.riskHist = saved.riskHist || [];
         S.predHist = saved.predHist || [];
         S.hist = saved.hist || [];
-        return;
+      } else {
+        // Empty store: user adds assets and maintenance requests manually
+        S.assets = [];
+        S.requests = [];
+        S.hist = [];
+        S.predHist = [];
+        S.riskHist = [];
+        S.notifs = [];
+        persist();
       }
 
-      // Empty store: user adds assets and maintenance requests manually
-      S.assets = [];
-      S.requests = [];
-      S.hist = [];
-      S.predHist = [];
-      S.riskHist = [];
-      S.notifs = [];
-      persist();
+      // Sync maintenance requests from MongoDB Atlas via Express backend
+      (async () => {
+        try {
+          const token = await auth?.currentUser?.getIdToken();
+          if (!token) return;
+          const res = await fetch('/api/maintenance-requests', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.requests && Array.isArray(data.requests) && data.requests.length > 0) {
+              const dbIds = new Set(data.requests.map((r) => r.id));
+              const localRemaining = S.requests.filter((r) => !dbIds.has(r.id));
+              S.requests = [...data.requests, ...localRemaining];
+              persist();
+              render(true);
+            }
+          }
+        } catch (e) {
+          console.warn('MongoDB sync notice:', e.message);
+        }
+      })();
     }
 
     function reportRows() {
@@ -381,6 +399,31 @@ export default function AdminDashboard({ onLogout, user }) {
       persist();
       toast(`${r.id} completed. ${a ? a.id + ' is now ' + cond(a.risk) + ' at ' + a.risk + '%.' : ''}`);
       render(true);
+
+      // Async update status in MongoDB Atlas via Express backend
+      (async () => {
+        try {
+          const token = await auth?.currentUser?.getIdToken();
+          if (token) {
+            await fetch(`/api/maintenance-requests/${r.id}/status`, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                status: 'Completed',
+                doneDate: r.doneDate,
+                actual: r.actual,
+                note: r.note,
+              }),
+            });
+          }
+        } catch (err) {
+          console.error('Failed to update status in MongoDB Atlas:', err);
+        }
+      })();
+
       const modal = $('#modal');
       if (modal && $('#ml')?.classList.contains('open') && modal.querySelector('#sch-date-input')) {
         modal.innerHTML = buildScheduleHTML(currentSchDate, currentSchDept);
@@ -917,7 +960,7 @@ export default function AdminDashboard({ onLogout, user }) {
         e.preventDefault();
         const nums = S.requests.map((r) => +r.id.slice(3)).filter((n) => !isNaN(n));
         const n = (nums.length ? Math.max(...nums) : 1000) + 1;
-        S.requests.push({
+        const newReq = {
           id: 'MR-' + n,
           asset: $('#nr-a').value,
           dept: $('#nr-d').value,
@@ -928,11 +971,30 @@ export default function AdminDashboard({ onLogout, user }) {
           dur: +$('#nr-du').value,
           start: null,
           desc: $('#nr-ds').value.trim(),
-        });
+        };
+        S.requests.push(newReq);
         persist();
         closeLayers();
         toast(`MR-${n} created. Run Block Optimization to schedule it.`);
         render(true);
+
+        (async () => {
+          try {
+            const token = await auth?.currentUser?.getIdToken();
+            if (token) {
+              await fetch('/api/maintenance-requests', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify(newReq),
+              });
+            }
+          } catch (err) {
+            console.error('Failed to save request to MongoDB Atlas:', err);
+          }
+        })();
       };
     }
 
@@ -1361,6 +1423,24 @@ export default function AdminDashboard({ onLogout, user }) {
         persist();
         toast(`${r.id} marked ${v}`);
         render(true);
+
+        (async () => {
+          try {
+            const token = await auth?.currentUser?.getIdToken();
+            if (token) {
+              await fetch(`/api/maintenance-requests/${r.id}/status`, {
+                method: 'PATCH',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({ status: v }),
+              });
+            }
+          } catch (err) {
+            console.error('Failed to update status in MongoDB Atlas:', err);
+          }
+        })();
       }));
       V.querySelectorAll('a[data-open-req]').forEach((a) => a.addEventListener('click', (e) => e.preventDefault()));
     };
@@ -1641,17 +1721,14 @@ export default function AdminDashboard({ onLogout, user }) {
     function render(keepScroll) {
       const k = route();
       currentRoute = k;
-      setActiveTab(k);
       root.querySelectorAll('#nav a').forEach((a) => {
         const on = a.dataset.k === k;
         a.classList.toggle('active', on);
         if (on) a.setAttribute('aria-current', 'page');
         else a.removeAttribute('aria-current');
       });
-      if (k !== 'requests' && V) {
-        V.innerHTML = pages[k] ? pages[k]() : '';
-        mounts[k]?.();
-      }
+      V.innerHTML = pages[k]();
+      mounts[k]?.();
       updateBell();
       if (keepScroll !== true) {
         window.scrollTo(0, 0);
@@ -1667,11 +1744,7 @@ export default function AdminDashboard({ onLogout, user }) {
     };
     $('#scrim').onclick = () => appEl.classList.remove('nav-open');
 
-    const handleHash = () => {
-      const k = window.location.hash.slice(1) || 'dashboard';
-      setActiveTab(k);
-      render();
-    };
+    const handleHash = () => render();
     window.addEventListener('hashchange', handleHash);
 
     const handleClick = (e) => {
@@ -1837,12 +1910,7 @@ export default function AdminDashboard({ onLogout, user }) {
               </div>
             </div>
           </header>
-          <main className="page" id="view" style={{ display: activeTab === 'requests' ? 'none' : '' }}></main>
-          {activeTab === 'requests' && (
-            <div style={{ flex: 1, overflowY: 'auto' }}>
-              <MaintenanceRequests user={user} onLogout={onLogout} />
-            </div>
-          )}
+          <main className="page" id="view"></main>
         </div>
       </div>
       <div className="layer" id="pl">
