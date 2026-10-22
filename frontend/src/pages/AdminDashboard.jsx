@@ -277,10 +277,9 @@ export default function AdminDashboard({ onLogout, user }) {
           });
           if (res.ok) {
             const data = await res.json();
-            if (data?.requests && Array.isArray(data.requests) && data.requests.length > 0) {
-              const dbIds = new Set(data.requests.map((r) => r.id));
-              const localRemaining = S.requests.filter((r) => !dbIds.has(r.id));
-              S.requests = [...data.requests, ...localRemaining];
+            if (Array.isArray(data?.requests)) {
+              // MongoDB is the sole source of truth for persisted requests
+              S.requests = data.requests;
               persist();
               render(true);
             }
@@ -384,50 +383,52 @@ export default function AdminDashboard({ onLogout, user }) {
       );
     }
 
-    function markCompleted(r, doneDate = TODAY, actual = null, note = '') {
+    async function markCompleted(r, doneDate = TODAY, actual = null, note = '') {
       if (!r) return;
-      const a = assetById(r.asset);
-      r.status = 'Completed';
-      r.doneDate = doneDate || TODAY;
-      r.actual = actual ?? r.dur;
-      if (note) r.note = note;
-      if (a) {
-        a.last = r.doneDate;
-        a.risk = Math.max(5, a.risk - 25);
-      }
-      addNotif('completed', `${r.id} completed`, `${r.type} on ${r.asset} finished.`, { t: 'request', id: r.id });
-      persist();
-      toast(`${r.id} completed. ${a ? a.id + ' is now ' + cond(a.risk) + ' at ' + a.risk + '%.' : ''}`);
-      render(true);
-
-      // Async update status in MongoDB Atlas via Express backend
-      (async () => {
-        try {
-          const token = await auth?.currentUser?.getIdToken();
-          if (token) {
-            await fetch(`/api/maintenance-requests/${r.id}/status`, {
-              method: 'PATCH',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                status: 'Completed',
-                doneDate: r.doneDate,
-                actual: r.actual,
-                note: r.note,
-              }),
-            });
+      try {
+        const token = await auth?.currentUser?.getIdToken();
+        if (token) {
+          const res = await fetch(`/api/maintenance-requests/${r.id}/status`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              status: 'Completed',
+              doneDate: doneDate || TODAY,
+              actual: actual ?? r.dur,
+              note: note || '',
+            }),
+          });
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData?.error || `HTTP ${res.status}`);
           }
-        } catch (err) {
-          console.error('Failed to update status in MongoDB Atlas:', err);
         }
-      })();
 
-      const modal = $('#modal');
-      if (modal && $('#ml')?.classList.contains('open') && modal.querySelector('#sch-date-input')) {
-        modal.innerHTML = buildScheduleHTML(currentSchDate, currentSchDept);
-        wireScheduleEvents(modal);
+        const a = assetById(r.asset);
+        r.status = 'Completed';
+        r.doneDate = doneDate || TODAY;
+        r.actual = actual ?? r.dur;
+        if (note) r.note = note;
+        if (a) {
+          a.last = r.doneDate;
+          a.risk = Math.max(5, a.risk - 25);
+        }
+        addNotif('completed', `${r.id} completed`, `${r.type} on ${r.asset} finished.`, { t: 'request', id: r.id });
+        persist();
+        toast(`${r.id} completed and recorded in MongoDB.`);
+        render(true);
+
+        const modal = $('#modal');
+        if (modal && $('#ml')?.classList.contains('open') && modal.querySelector('#sch-date-input')) {
+          modal.innerHTML = buildScheduleHTML(currentSchDate, currentSchDept);
+          wireScheduleEvents(modal);
+        }
+      } catch (err) {
+        console.error('Failed to update status in MongoDB Atlas:', err);
+        toast(`Error updating status: ${err.message}`);
       }
     }
 
@@ -956,45 +957,57 @@ export default function AdminDashboard({ onLogout, user }) {
         }
       };
       $('#nr-d').onchange = fillWork;
-      $('#nrf').onsubmit = (e) => {
+      $('#nrf').onsubmit = async (e) => {
         e.preventDefault();
-        const nums = S.requests.map((r) => +r.id.slice(3)).filter((n) => !isNaN(n));
-        const n = (nums.length ? Math.max(...nums) : 1000) + 1;
-        const newReq = {
-          id: 'MR-' + n,
+        const submitBtn = $('#nrf button[type="submit"]');
+        const origBtnText = submitBtn ? submitBtn.textContent : 'Create Request';
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Saving...';
+        }
+
+        const payload = {
           asset: $('#nr-a').value,
           dept: $('#nr-d').value,
           type: $('#nr-w').value,
           pri: $('#nr-p').value,
           date: $('#nr-dt').value,
-          status: 'Pending',
           dur: +$('#nr-du').value,
-          start: null,
           desc: $('#nr-ds').value.trim(),
         };
-        S.requests.push(newReq);
-        persist();
-        closeLayers();
-        toast(`MR-${n} created. Run Block Optimization to schedule it.`);
-        render(true);
 
-        (async () => {
-          try {
-            const token = await auth?.currentUser?.getIdToken();
-            if (token) {
-              await fetch('/api/maintenance-requests', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${token}`,
-                },
-                body: JSON.stringify(newReq),
-              });
-            }
-          } catch (err) {
-            console.error('Failed to save request to MongoDB Atlas:', err);
+        try {
+          const token = await auth?.currentUser?.getIdToken();
+          if (!token) throw new Error('Authentication required. Please log in.');
+
+          const res = await fetch('/api/maintenance-requests', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(payload),
+          });
+
+          const result = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(result?.error || `Server error (HTTP ${res.status})`);
           }
-        })();
+
+          const savedReq = result.request;
+          S.requests.unshift(savedReq);
+          persist();
+          closeLayers();
+          toast(`${savedReq.id} created and saved to MongoDB.`);
+          render(true);
+        } catch (err) {
+          console.error('Failed to save request to MongoDB Atlas:', err);
+          toast(`Failed to save request: ${err.message}`);
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = origBtnText;
+          }
+        }
       };
     }
 
@@ -1411,36 +1424,42 @@ export default function AdminDashboard({ onLogout, user }) {
       $('#bk-p').onchange = (e) => { S.ui.bdept = e.target.value; render(true); };
       $('#bk-run').onclick = () => { optimize(); render(true); };
       $('#bk-view-sch-modal')?.addEventListener('click', () => openSchedule(S.ui.bd, S.ui.bdept));
-      V.querySelectorAll('[data-st]').forEach((s) => (s.onchange = (e) => {
+      V.querySelectorAll('[data-st]').forEach((s) => (s.onchange = async (e) => {
         const r = reqById(s.dataset.st), v = e.target.value;
+        const prevStatus = r.status;
         if (v === 'Completed') {
           openComplete(r.id);
           render(true);
           return;
         }
-        r.status = v;
-        if (v === 'Delayed') addNotif('delayed', `${r.id} is delayed`, `${r.type} on ${r.asset} did not finish on schedule.`, { t: 'request', id: r.id });
-        persist();
-        toast(`${r.id} marked ${v}`);
-        render(true);
 
-        (async () => {
-          try {
-            const token = await auth?.currentUser?.getIdToken();
-            if (token) {
-              await fetch(`/api/maintenance-requests/${r.id}/status`, {
-                method: 'PATCH',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${token}`,
-                },
-                body: JSON.stringify({ status: v }),
-              });
+        try {
+          const token = await auth?.currentUser?.getIdToken();
+          if (token) {
+            const res = await fetch(`/api/maintenance-requests/${r.id}/status`, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ status: v }),
+            });
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({}));
+              throw new Error(errData?.error || `HTTP ${res.status}`);
             }
-          } catch (err) {
-            console.error('Failed to update status in MongoDB Atlas:', err);
           }
-        })();
+
+          r.status = v;
+          if (v === 'Delayed') addNotif('delayed', `${r.id} is delayed`, `${r.type} on ${r.asset} did not finish on schedule.`, { t: 'request', id: r.id });
+          persist();
+          toast(`${r.id} marked ${v} in MongoDB.`);
+          render(true);
+        } catch (err) {
+          console.error('Failed to update status in MongoDB Atlas:', err);
+          toast(`Failed to update status: ${err.message}`);
+          s.value = prevStatus;
+        }
       }));
       V.querySelectorAll('a[data-open-req]').forEach((a) => a.addEventListener('click', (e) => e.preventDefault()));
     };
