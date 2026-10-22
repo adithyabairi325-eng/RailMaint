@@ -435,8 +435,22 @@ function Login({ onLoginSuccess }) {
         throw new Error('The backend did not return a verified user.');
       }
 
+      if (!result?.role) {
+        throw new Error('The backend did not return an authorized role for this account.');
+      }
+
+      const verifiedRole = result.role;
+
       if (onLoginSuccess) {
-        onLoginSuccess({ ...userCredential.user, role }, role);
+        onLoginSuccess(
+          {
+            ...userCredential.user,
+            role: verifiedRole,
+            department: result.department ?? null,
+            status: result.status,
+          },
+          verifiedRole,
+        );
       }
     } catch (error) {
       console.error('Login failed:', error);

@@ -1,8 +1,12 @@
+Write-Host "Safeguarding secrets..." -ForegroundColor Cyan
+git rm --cached backend/.env -f 2>$null
+git rm --cached .env -f 2>$null
+
 Write-Host "Staging all changes..." -ForegroundColor Cyan
 git add .
 
 Write-Host "Committing changes..." -ForegroundColor Cyan
-git commit -m "Update maintenance requests actions, dynamic delayed/completed status, and schedule synchronization"
+git commit -m "Configure MongoDB Atlas authentication, strict role-based dashboard routing, and simplified architecture"
 
 Write-Host "Configuring remote origin..." -ForegroundColor Cyan
 git remote set-url origin https://github.com/adithyabairi325-eng/RailMaint.git

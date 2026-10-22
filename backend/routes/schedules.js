@@ -3,10 +3,10 @@ import { Router } from "express";
 const router = Router();
 
 // GET /api/schedules - list current maintenance schedules
-router.get("/", async (req, res) => {
-  return res.json({
+router.get("/", (req, res) => {
+  res.json({
     schedules: [],
-    message: "Schedule service ready."
+    message: "Schedule service ready.",
   });
 });
 
