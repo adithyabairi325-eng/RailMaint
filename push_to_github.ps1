@@ -6,7 +6,7 @@ Write-Host "Staging all changes..." -ForegroundColor Cyan
 git add .
 
 Write-Host "Committing changes..." -ForegroundColor Cyan
-git commit -m "Configure MongoDB Atlas authentication, strict role-based dashboard routing, and simplified architecture"
+git commit -m "Remove destructive startup behavior, establish dedicated User model, and finalize MongoDB Atlas authentication"
 
 Write-Host "Configuring remote origin..." -ForegroundColor Cyan
 git remote set-url origin https://github.com/adithyabairi325-eng/RailMaint.git

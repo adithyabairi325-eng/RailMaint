@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { signOut } from 'firebase/auth';
+import { auth } from './firebase/firebaseConfig';
 import Login from './pages/Login';
 import AdminDashboard from './pages/AdminDashboard';
 import EngineeringDashboard from './pages/EngineeringDashboard';
@@ -16,9 +18,17 @@ function App() {
     setCurrentRole(verifiedRole);
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setCurrentRole(null);
+  const handleLogout = async () => {
+    try {
+      if (auth) {
+        await signOut(auth);
+      }
+    } catch (err) {
+      console.error('Firebase sign-out failed:', err);
+    } finally {
+      setCurrentUser(null);
+      setCurrentRole(null);
+    }
   };
 
   // If not logged in, show the Login page

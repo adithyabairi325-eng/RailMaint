@@ -7,14 +7,7 @@ import authRoutes from "./routes/auth.js";
 import scheduleRoutes from "./routes/schedules.js";
 import { connectDB } from "./db.js";
 
-import fs from "fs";
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Clean up unused folders (middleware, models, scripts) and empty route files
-["backend/middleware", "backend/models", "backend/scripts", "backend/routes/assets.js", "backend/routes/maintenance.js"].forEach((p) => {
-  try { fs.rmSync(path.resolve(p), { recursive: true, force: true }); } catch {}
-});
 
 // Explicitly load backend/.env first, then fallback to project root .env
 dotenv.config({ path: path.resolve(__dirname, ".env") });

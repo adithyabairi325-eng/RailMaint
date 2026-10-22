@@ -1,47 +1,7 @@
 import { Router } from "express";
 import { getAuth } from "firebase-admin/auth";
-import mongoose from "mongoose";
+import User from "../models/User.js";
 import { connectDB } from "../db.js";
-
-// User Schema and Model defined directly here — no separate models directory needed
-const userSchema = new mongoose.Schema(
-  {
-    firebaseUid: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      index: true,
-    },
-    email: {
-      type: String,
-      required: true,
-      trim: true,
-      lowercase: true,
-    },
-    role: {
-      type: String,
-      required: true,
-      enum: ["admin", "engineering", "traction", "signal", "passenger"],
-    },
-    department: {
-      type: String,
-      trim: true,
-      default: null,
-    },
-    status: {
-      type: String,
-      required: true,
-      enum: ["active", "inactive"],
-      default: "active",
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
-
-const User = mongoose.models.User || mongoose.model("User", userSchema);
 
 const router = Router();
 
