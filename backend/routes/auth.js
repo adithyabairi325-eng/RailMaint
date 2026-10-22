@@ -1,7 +1,5 @@
 import { Router } from "express";
-import { getAuth } from "firebase-admin/auth";
-import User from "../models/User.js";
-import { connectDB } from "../db.js";
+import { authenticateToken, requireRole } from "../middleware/auth.js";
 
 const router = Router();
 
@@ -9,49 +7,50 @@ const router = Router();
  * GET /api/auth/me
  * 1. Checks Firebase Bearer token -> 401 if missing/invalid
  * 2. Queries user from MongoDB Atlas by Firebase UID -> 403 if not found or inactive
- * 3. Returns role and profile details to frontend
+ * 3. Compares selected login role (header x-selected-role, query param, or body) with MongoDB role
+ *    -> 403 if mismatch: "The selected role does not match your assigned role. Please select the correct role."
+ * 4. Returns verified user profile from MongoDB Atlas
  */
-router.get("/me", async (req, res) => {
-  const token = req.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!token) {
-    return res.status(401).json({ error: "No authorization token provided." });
-  }
+router.get("/me", authenticateToken, (req, res) => {
+  const user = req.user;
+  const selectedRole =
+    req.get("x-selected-role") ||
+    req.query?.selectedRole ||
+    req.query?.role ||
+    req.body?.selectedRole ||
+    req.body?.role;
 
-  let decodedToken;
-  try {
-    decodedToken = await getAuth().verifyIdToken(token);
-  } catch (error) {
-    console.error("Token verification failed:", error.message);
-    return res.status(401).json({ error: "Invalid or expired session. Please log in again." });
-  }
+  if (selectedRole) {
+    const normalizedSelected = String(selectedRole).trim().toLowerCase();
+    const normalizedDbRole = String(user.role || "").trim().toLowerCase();
 
-  try {
-    await connectDB();
-    const user = await User.findOne({ firebaseUid: decodedToken.uid });
-
-    if (!user) {
+    if (normalizedSelected !== normalizedDbRole) {
       return res.status(403).json({
-        error: "Access Denied: Your account is not registered in RailMaint. Contact an administrator.",
+        error: "The selected role does not match your assigned role. Please select the correct role.",
       });
     }
-
-    if (user.status !== "active") {
-      return res.status(403).json({
-        error: "Access Denied: Your account is inactive. Contact an administrator.",
-      });
-    }
-
-    return res.json({
-      uid: user.firebaseUid,
-      email: user.email,
-      role: user.role,
-      department: user.department ?? null,
-      status: user.status,
-    });
-  } catch (dbError) {
-    console.error("Database lookup error:", dbError.message);
-    return res.status(500).json({ error: "Database error while fetching profile." });
   }
+
+  return res.json({
+    uid: user.firebaseUid,
+    email: user.email,
+    role: user.role,
+    department: user.department ?? null,
+    status: user.status,
+  });
+});
+
+/**
+ * GET /api/auth/admin-only
+ * Protected verification endpoint: requires authenticated user with admin role.
+ * Non-admin roles (e.g. engineering) receive 403 Forbidden.
+ */
+router.get("/admin-only", authenticateToken, requireRole("admin"), (req, res) => {
+  return res.json({
+    message: "Admin authorization verified successfully.",
+    user: req.user.email,
+    role: req.user.role,
+  });
 });
 
 export default router;

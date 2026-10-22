@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import './Login.css';
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { auth } from "../firebase/firebaseConfig";
 
 const ROLES = [
@@ -408,6 +408,7 @@ function Login({ onLoginSuccess }) {
       const response = await fetch('/api/auth/me', {
         headers: {
           Authorization: `Bearer ${idToken}`,
+          'x-selected-role': role,
         },
       });
 
@@ -426,16 +427,25 @@ function Login({ onLoginSuccess }) {
       }
 
       if (!response.ok) {
+        if (auth) {
+          await signOut(auth).catch(() => {});
+        }
         throw new Error(
           result?.error || `The backend could not verify your sign-in (HTTP ${response.status}).`,
         );
       }
 
       if (!result?.uid) {
+        if (auth) {
+          await signOut(auth).catch(() => {});
+        }
         throw new Error('The backend did not return a verified user.');
       }
 
       if (!result?.role) {
+        if (auth) {
+          await signOut(auth).catch(() => {});
+        }
         throw new Error('The backend did not return an authorized role for this account.');
       }
 

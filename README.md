@@ -59,30 +59,39 @@ npm run setup:admin -- --email adhi123@gmail.com --uid 0lR65ji0uwWZ1mM0sCmzg6x0X
 
 ---
 
-## 🔄 Authentication & Role Workflow
+---
+
+## 🔄 Authentication & Role-Consistency Workflow
 
 ```
 +---------------------------------------------------------------------------------------+
 |                                     FRONTEND                                          |
 |                                                                                       |
-|  1. User enters Email & Password at Login Page (http://localhost:5173)                |
-|  2. Firebase Client SDK (signInWithEmailAndPassword) verifies credentials            |
-|  3. Firebase returns a signed ID Token and verified UID                              |
-|  4. Frontend sends ID Token via: GET /api/auth/me with header Authorization: Bearer   |
+|  1. User selects Role from dropdown (e.g., "Engineering")                             |
+|  2. User enters Email & Password at Login Page (http://localhost:5173)                |
+|  3. Firebase Client SDK (signInWithEmailAndPassword) verifies credentials            |
+|  4. Firebase returns a signed ID Token and verified UID                              |
+|  5. Frontend sends ID Token + Selected Role via:                                      |
+|     GET /api/auth/me                                                                  |
+|     Headers: Authorization: Bearer <idToken>                                          |
+|              x-selected-role: <selectedRole>                                          |
 +------------------------------------------+--------------------------------------------+
                                            |
-                                           | HTTP Request + Token
+                                           | HTTP Request + Token + Selected Role
                                            v
 +---------------------------------------------------------------------------------------+
 |                                  EXPRESS BACKEND                                      |
 |                                                                                       |
-|  5. Express route (/api/auth/me) extracts the Bearer token                            |
-|  6. Firebase Admin SDK (verifyIdToken) cryptographically verifies the token           |
-|  7. Express connects to MongoDB Atlas and queries: User.findOne({ firebaseUid: uid })  |
-|  8. Access Control Checks:                                                            |
+|  6. Express middleware (authenticateToken) extracts and validates Bearer token       |
+|  7. Firebase Admin SDK (verifyIdToken) independently verifies token and extracts UID  |
+|  8. Express connects to MongoDB Atlas and queries: User.findOne({ firebaseUid: uid })  |
+|  9. Access & Role Consistency Checks:                                                 |
 |     * If user profile not found in MongoDB Atlas  --> Returns 403 Forbidden           |
 |     * If user status is not "active"              --> Returns 403 Forbidden           |
-|  9. Returns verified profile: { uid, email, role, department, status }                 |
+|     * If selected role != user.role in MongoDB    --> Returns 403 Forbidden:          |
+|       "The selected role does not match your assigned role. Please select the         |
+|        correct role."                                                                 |
+| 10. If roles match, returns verified profile: { uid, email, role, department, status }|
 +------------------------------------------+--------------------------------------------+
                                            |
                                            | Verified Database Role
@@ -90,8 +99,8 @@ npm run setup:admin -- --email adhi123@gmail.com --uid 0lR65ji0uwWZ1mM0sCmzg6x0X
 +---------------------------------------------------------------------------------------+
 |                                FRONTEND DASHBOARD ROUTING                             |
 |                                                                                       |
-|  10. Frontend receives verified role from MongoDB (e.g., "admin")                     |
-|  11. App.jsx conditionally renders the matching dashboard:                            |
+|  11. Frontend receives verified role from MongoDB Atlas (e.g., "admin")               |
+|  12. App.jsx conditionally renders the matching dashboard:                            |
 |      - admin        --> <AdminDashboard />                                            |
 |      - engineering  --> <EngineeringDashboard />                                      |
 |      - traction     --> <TractionDashboard />                                         |
@@ -113,8 +122,9 @@ npm run setup:admin -- --email adhi123@gmail.com --uid 0lR65ji0uwWZ1mM0sCmzg6x0X
 | **`backend/index.js`** | Main entry point for the Express backend. Loads `.env`, initializes Firebase Admin SDK, connects to MongoDB Atlas, and mounts API routes. Contains no destructive file deletion code. |
 | **`backend/db.js`** | Database connection manager. Uses Mongoose to connect directly to MongoDB Atlas. Validates that `MONGODB_URI` is present and does not allow localhost fallback. |
 | **`backend/models/User.js`** | Mongoose User model schema. Enforces required fields (`firebaseUid`, `email`, single `role`, `status`). Passwords are never stored here. |
-| **`backend/routes/auth.js`** | The `/api/auth/me` endpoint. Verifies incoming Firebase tokens, queries MongoDB Atlas for the user's role, and returns the authorized profile. Strictly read-only at login time. |
-| **`backend/routes/schedules.js`** | REST API endpoint for managing maintenance schedules and block requests across railway departments. |
+| **`backend/middleware/auth.js`** | Express middleware providing `authenticateToken` (verifies Firebase ID token & loads MongoDB user) and `requireRole` (restricts endpoints to authorized roles like `admin`). |
+| **`backend/routes/auth.js`** | The `/api/auth/me` endpoint. Verifies incoming Firebase tokens, queries MongoDB Atlas for the user's role, enforces role consistency with `x-selected-role`, and returns the authorized profile. Also provides `/api/auth/admin-only` for route authorization testing. |
+| **`backend/routes/schedules.js`** | Protected REST API endpoint for maintenance schedules. Requires valid authentication for `/` and admin privileges for `/admin`. |
 | **`backend/scripts/setupAdmin.js`** | Controlled provisioning script. Safely creates or checks the initial `admin` role in MongoDB Atlas for your verified Firebase UID without exposing passwords or overwriting existing records. |
 
 ---
@@ -124,7 +134,7 @@ npm run setup:admin -- --email adhi123@gmail.com --uid 0lR65ji0uwWZ1mM0sCmzg6x0X
 | File | Purpose |
 | :--- | :--- |
 | **`frontend/src/firebase/firebaseConfig.js`** | Initializes the Firebase client app and exports `auth` for client-side email/password authentication. |
-| **`frontend/src/pages/Login.jsx`** | The login interface. Collects credentials, calls `signInWithEmailAndPassword`, sends the token to `/api/auth/me`, and handles error states. Does not send role override headers. |
+| **`frontend/src/pages/Login.jsx`** | The login interface. Collects credentials and role selection, calls `signInWithEmailAndPassword`, sends the token and `x-selected-role` to `/api/auth/me`, and displays clear error messages if role mismatch or unauthorized. Performs clean `signOut(auth)` on rejection. |
 | **`frontend/src/App.jsx`** | Top-level state and routing. When login succeeds, receives the MongoDB-verified role and displays the matching dashboard. On logout, clears application state and executes `signOut(auth)`. |
 | **`frontend/src/pages/AdminDashboard.jsx`** | Cross-department maintenance scheduling, conflict detection, and timetable optimization for railway administrators. |
 | **`frontend/src/pages/EngineeringDashboard.jsx`** | Track maintenance, speed restriction planning, and structural inspection dashboard. |
@@ -135,14 +145,16 @@ npm run setup:admin -- --email adhi123@gmail.com --uid 0lR65ji0uwWZ1mM0sCmzg6x0X
 
 ---
 
-## 🧪 Testing Authentication & Edge Cases
+## 🧪 Verification & Role Test Cases
 
-| Test Case | Scenario / Action | Expected Result |
-| :--- | :--- | :--- |
-| **Valid Admin Login** | Sign in at `http://localhost:5173` with `adhi123@gmail.com` / `12345678`. | Firebase authenticates, MongoDB Atlas returns `role: "admin"`, and **Admin Dashboard** opens. |
-| **Missing Token** | Call `GET http://localhost:3000/api/auth/me` with no Authorization header. | Express returns `401 Unauthorized` (`No authorization token provided`). |
-| **Invalid Token** | Call `/api/auth/me` with `Authorization: Bearer invalid-token`. | Express returns `401 Unauthorized` (`Invalid or expired session`). |
-| **Unregistered User** | Sign in with a valid Firebase account that has no MongoDB Atlas document. | Express returns `403 Forbidden` (`Access Denied: Your account is not registered`). No profile is created. |
-| **Inactive Account** | Set `status: "inactive"` on a MongoDB user document and attempt login. | Express returns `403 Forbidden` (`Access Denied: Your account is inactive`). |
-| **Logout Verification** | Click "Sign Out" from the dashboard. | `signOut(auth)` executes, app state resets, and user returns to login form. |
-| **Build & Lint Checks** | Run `npm run lint` and `npm run build`. | Verifies zero syntax errors and builds frontend production assets cleanly. |
+| # | Test Scenario | Inputs / Action | Expected Result & Status |
+| :-: | :--- | :--- | :--- |
+| **1** | **Engineering Match** | User with MongoDB role `engineering` selects `engineering` | Login succeeds; redirected to Engineering Dashboard. (HTTP 200) |
+| **2** | **Engineering selecting Admin** | User with MongoDB role `engineering` selects `admin` | Login rejected: *"The selected role does not match your assigned role. Please select the correct role."* (HTTP 403) |
+| **3** | **Admin selecting Engineering** | User with MongoDB role `admin` selects `engineering` | Login rejected: *"The selected role does not match your assigned role. Please select the correct role."* (HTTP 403) |
+| **4** | **Unregistered Firebase User** | User exists in Firebase but has no MongoDB Atlas document | Access denied: *"Access Denied: Your account is not registered in RailMaint."* (HTTP 403) |
+| **5** | **Inactive Profile** | User document in MongoDB has `status: "inactive"` | Access denied: *"Access Denied: Your account is inactive. Contact an administrator."* (HTTP 403) |
+| **6** | **Invalid / Expired Token** | Request with missing, expired, or corrupted Bearer token | Access denied: *"Your sign-in session is invalid or has expired."* (HTTP 401) |
+| **7** | **Tampered Frontend Role** | User modifies frontend state or headers to impersonate another role | Backend authorization relies solely on MongoDB Atlas profile; permissions cannot be escalated. |
+| **8** | **Non-Admin API Access** | Engineering user requests admin endpoint (`GET /api/schedules/admin` or `GET /api/auth/admin-only`) | Access denied: *"Access Denied: You do not have permission to access this resource."* (HTTP 403) |
+| **9** | **Admin Match** | User with MongoDB role `admin` selects `admin` | Login succeeds; redirected to Admin Dashboard. (HTTP 200) |
