@@ -1741,27 +1741,108 @@ export default function AdminDashboard({ onLogout, user }) {
       }
       return o;
     };
+    /* reports */
+    let isFetchingReports = false;
+    async function fetchReportsData() {
+      if (isFetchingReports) return;
+      isFetchingReports = true;
+      try {
+        const token = await auth?.currentUser?.getIdToken();
+        if (!token) {
+          isFetchingReports = false;
+          return;
+        }
+
+        const { from, to, dept } = S.ui.rp;
+        const qParams = new URLSearchParams();
+        if (from) qParams.set('from', from);
+        if (to) qParams.set('to', to);
+        if (dept) qParams.set('department', dept);
+
+        const qs = qParams.toString() ? `?${qParams.toString()}` : '';
+        const deptQs = dept ? `?department=${encodeURIComponent(dept)}` : '';
+        const headers = { Authorization: `Bearer ${token}` };
+
+        const [ovRes, dpRes, trRes, asRes] = await Promise.all([
+          fetch(`/api/reports/overview${qs}`, { headers }).then((r) => r.ok ? r.json() : null).catch(() => null),
+          fetch(`/api/reports/departments${qs}`, { headers }).then((r) => r.ok ? r.json() : null).catch(() => null),
+          fetch(`/api/reports/trends${qs}`, { headers }).then((r) => r.ok ? r.json() : null).catch(() => null),
+          fetch(`/api/reports/assets${deptQs}`, { headers }).then((r) => r.ok ? r.json() : null).catch(() => null),
+        ]);
+
+        S.rpData = {
+          overview: ovRes,
+          departments: dpRes,
+          trends: trRes,
+          assets: asRes,
+          loaded: true,
+        };
+      } catch (err) {
+        console.warn('Reports fetch error:', err.message);
+      } finally {
+        isFetchingReports = false;
+        render(true);
+      }
+    }
+
     function repRows() {
       const { from, to, dept } = S.ui.rp;
-      return reportRows().filter((r) => r.date >= from && r.date <= to && (!dept || r.dept === dept)).sort((a, b) => b.date.localeCompare(a.date));
+      return S.requests
+        .filter((r) => {
+          const d = r.doneDate || r.date;
+          if (from && d < from) return false;
+          if (to && d > to) return false;
+          if (dept && r.dept !== dept) return false;
+          return r.status === 'Completed' || (r.date < TODAY);
+        })
+        .map((r) => ({
+          id: r.id,
+          asset: r.asset,
+          dept: r.dept,
+          date: r.status === 'Completed' ? (r.doneDate || r.date) : r.date,
+          dur: r.status === 'Completed' ? (r.actual ?? r.dur) : r.dur,
+          done: r.status === 'Completed',
+        }))
+        .sort((a, b) => b.date.localeCompare(a.date));
     }
 
     pages.reports = () => {
-      const f = S.ui.rp, rows = repRows(), done = rows.filter((r) => r.done), over = rows.length - done.length;
-      const avg = done.length ? Math.round(done.reduce((s, r) => s + r.dur, 0) / done.length) : 0;
-      const ms = f.from <= f.to ? monthsBetween(f.from, f.to) : [];
-      const ml = ms.map((m) => MON[+m.slice(5) - 1]);
-      const comp = ms.map((m) => done.filter((r) => r.date.startsWith(m)).length);
-      const fail = ms.map((m) => (f.dept ? [f.dept] : DEPTS).reduce((s, d) => s + 2 + (hash(d + m) % 4), 0));
-      const dp = DEPTS.map((d) => {
-        const dd = rows.filter((r) => r.dept === d), c = dd.filter((r) => r.done).length;
-        return [SHORT[d], dd.length ? Math.round((c / dd.length) * 100) : null, c, dd.length];
+      const f = S.ui.rp;
+      if (!S.rpData && !isFetchingReports) {
+        fetchReportsData();
+      }
+
+      const rows = repRows();
+      const doneRows = rows.filter((r) => r.done);
+      const overRows = rows.filter((r) => !r.done);
+
+      // Prefer real API overview if available, fallback to local dataset
+      const completedCount = S.rpData?.overview?.completedRequests ?? doneRows.length;
+      const overdueCount = S.rpData?.overview?.overdueRequests ?? overRows.length;
+      const avgDurationStr = S.rpData?.overview?.avgActualDuration != null
+        ? `${S.rpData.overview.avgActualDuration} min`
+        : (doneRows.length ? `${Math.round(doneRows.reduce((s, r) => s + (r.dur || 0), 0) / doneRows.length)} min` : '—');
+
+      // Trends data from real API
+      const trendItems = S.rpData?.trends?.trends || [];
+      const trLabels = trendItems.map((t) => t.monthLabel.split(' ')[0]);
+      const trCompleted = trendItems.map((t) => t.completedRequests);
+      const trOverdue = trendItems.map((t) => t.overdueRequests);
+
+      // Department performance from real API
+      const deptItems = S.rpData?.departments?.departments || DEPTS.map((d) => {
+        const dd = rows.filter((r) => r.dept === d);
+        const c = dd.filter((r) => r.done).length;
+        return {
+          department: d,
+          totalRequests: dd.length,
+          completedRequests: c,
+          completionRate: dd.length ? Math.round((c / dd.length) * 100) : 0,
+        };
       });
-      const fm = Math.max(...fail, 1), fmax = Math.ceil(fm / 5) * 5;
 
       return `<div class="ph-row">
         <h1>Reports &amp; Analytics</h1>
-        <span class="demo">Failure trends are illustrative</span>
       </div>
       <div class="toolbar">
         <input type="date" id="rp-f" value="${f.from}" aria-label="From date">
@@ -1769,15 +1850,35 @@ export default function AdminDashboard({ onLogout, user }) {
         <select id="rp-d" aria-label="Department">${opts(DEPTS, f.dept, 'All departments')}</select>
       </div>
       <div class="stats three">
-        ${stat('Completed Tasks', done.length)}
-        ${stat('Average Completion Time', avg + ' min')}
-        ${stat('Overdue Tasks', over)}
+        ${stat('Completed Tasks', completedCount)}
+        ${stat('Average Completion Time', avgDurationStr)}
+        ${stat('Overdue Tasks', overdueCount)}
       </div>
-      ${ms.length ? `<div class="cols even gap" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))">
-        <section class="card"><h2>Maintenance Completion Trends</h2>${barChart(ml, comp)}</section>
-        <section class="card"><h2>Asset Failure Trends</h2>${ms.length > 1 ? lineChart(fail, { max: fmax, fmt: (v) => v, xl: [[ml[0], 0, 'l'], [ml[ml.length - 1], 100, 'r']] }) : barChart(ml, fail)}</section>
-        <section class="card"><h2>Department Performance</h2><div class="hb">${dp.map(([n, p, c, t]) => `<div class="r"><b>${n}</b><span>${p == null ? 'No tasks' : `${p}% (${c}/${t})`}</span><div class="meter"><i style="width:${p || 0}%"></i></div></div>`).join('')}</div></section>
-      </div>` : `<div class="card gap empty">Choose a valid date range.</div>`}
+      ${(trendItems.length || rows.length) ? `<div class="cols even gap" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))">
+        <section class="card">
+          <h2>Maintenance Completion Trends</h2>
+          ${trendItems.length ? barChart(trLabels, trCompleted) : '<div class="empty small">No completion data</div>'}
+        </section>
+        <section class="card">
+          <h2>Overdue Work Trends</h2>
+          ${trendItems.length ? barChart(trLabels, trOverdue) : '<div class="empty small">No overdue trends</div>'}
+        </section>
+        <section class="card">
+          <h2>Department Performance</h2>
+          <div class="hb">
+            ${deptItems.map((d) => {
+              const name = SHORT[d.department] || d.department;
+              const rate = d.completionRate;
+              const isZero = d.totalRequests === 0;
+              return `<div class="r">
+                <b>${name}</b>
+                <span>${isZero ? 'No tasks' : `${rate}% (${d.completedRequests}/${d.totalRequests})`}</span>
+                <div class="meter"><i style="width:${isZero ? 0 : rate}%"></i></div>
+              </div>`;
+            }).join('')}
+          </div>
+        </section>
+      </div>` : `<div class="card gap empty">No records found for the selected range.</div>`}
       <section class="card flush gap">
         <div class="ph-row" style="padding:18px 20px 0">
           <h2 style="margin:0">Completed and Overdue Work</h2>
@@ -1792,7 +1893,7 @@ export default function AdminDashboard({ onLogout, user }) {
                 <td>${r.asset}</td>
                 <td>${r.dept}</td>
                 <td class="num">${r.done ? fmtD(r.date) : '—'}</td>
-                <td class="num">${r.done ? r.dur + ' min' : '—'}</td>
+                <td class="num">${r.done ? (r.dur ? r.dur + ' min' : '—') : '—'}</td>
                 <td>${pill(r.done ? 'Completed' : 'Overdue')}</td>
               </tr>`).join('') : `<tr><td colspan="6" class="empty">No work in this range.</td></tr>`}
             </tbody>
@@ -1805,31 +1906,53 @@ export default function AdminDashboard({ onLogout, user }) {
       const f = S.ui.rp;
       const rpf = $('#rp-f');
       if (rpf) {
-        const updateFrom = (e) => { if (e.target.value && e.target.value !== f.from) { f.from = e.target.value; render(true); } };
+        const updateFrom = (e) => {
+          if (e.target.value && e.target.value !== f.from) {
+            f.from = e.target.value;
+            S.rpData = null;
+            fetchReportsData();
+          }
+        };
         rpf.onchange = updateFrom;
         rpf.oninput = updateFrom;
       }
       const rpt = $('#rp-t');
       if (rpt) {
-        const updateTo = (e) => { if (e.target.value && e.target.value !== f.to) { f.to = e.target.value; render(true); } };
+        const updateTo = (e) => {
+          if (e.target.value && e.target.value !== f.to) {
+            f.to = e.target.value;
+            S.rpData = null;
+            fetchReportsData();
+          }
+        };
         rpt.onchange = updateTo;
         rpt.oninput = updateTo;
       }
-      $('#rp-d').onchange = (e) => { f.dept = e.target.value; render(true); };
-      $('#rp-csv').onclick = () => {
-        const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
-        const csv = [['Request ID', 'Asset', 'Department', 'Completion Date', 'Duration (min)', 'Status'].map(q).join(',')].concat(
-          repRows().map((r) => [r.id, r.asset, r.dept, r.done ? fmtD(r.date) : '', r.done ? r.dur : '', r.done ? 'Completed' : 'Overdue'].map(q).join(','))
-        ).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'railmaint-report.csv';
-        a.click();
-        URL.revokeObjectURL(url);
-        toast('Report exported to CSV');
-      };
+      const rpd = $('#rp-d');
+      if (rpd) {
+        rpd.onchange = (e) => {
+          f.dept = e.target.value;
+          S.rpData = null;
+          fetchReportsData();
+        };
+      }
+      const rpCsv = $('#rp-csv');
+      if (rpCsv) {
+        rpCsv.onclick = () => {
+          const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+          const csv = [['Request ID', 'Asset', 'Department', 'Completion Date', 'Duration (min)', 'Status'].map(q).join(',')].concat(
+            repRows().map((r) => [r.id, r.asset, r.dept, r.done ? fmtD(r.date) : '', r.done ? r.dur : '', r.done ? 'Completed' : 'Overdue'].map(q).join(','))
+          ).join('\n');
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'railmaint-report.csv';
+          a.click();
+          URL.revokeObjectURL(url);
+          toast('Report exported to CSV');
+        };
+      }
     };
 
     /* notifications */
