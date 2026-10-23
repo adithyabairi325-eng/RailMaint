@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { signOut } from 'firebase/auth';
 import { auth } from './firebase/firebaseConfig';
 import Login from './pages/Login';
-import AdminDashboard from './pages/AdminDashboard';
+import AdminDashboard from './pages/AdminDashboard/AdminDashboard';
 import EngineeringDashboard from './pages/EngineeringDashboard';
 import TractionDashboard from './pages/TractionDashboard';
 import SignalDashboard from './pages/SignalDashboard';

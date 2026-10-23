@@ -6,6 +6,7 @@ import { initializeApp, getApps, cert } from "firebase-admin/app";
 import authRoutes from "./routes/auth.js";
 import scheduleRoutes from "./routes/schedules.js";
 import maintenanceRequestRoutes from "./routes/maintenanceRequests.js";
+import assetRoutes from "./routes/assets.js";
 import { connectDB } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,6 +48,7 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/schedules", scheduleRoutes);
 app.use("/api/maintenance-requests", maintenanceRequestRoutes);
+app.use("/api/assets", assetRoutes);
 
 const port = Number(process.env.PORT ?? 3000);
 

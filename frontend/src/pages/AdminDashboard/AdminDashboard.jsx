@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import './AdminDashboard.css';
-import { auth } from '../firebase/firebaseConfig';
+import { auth } from '../../firebase/firebaseConfig';
 
 export default function AdminDashboard({ onLogout, user }) {
   const containerRef = useRef(null);
@@ -286,6 +286,27 @@ export default function AdminDashboard({ onLogout, user }) {
           }
         } catch (e) {
           console.warn('MongoDB sync notice:', e.message);
+        }
+      })();
+
+      // Sync assets from MongoDB Atlas via Express backend
+      (async () => {
+        try {
+          const token = await auth?.currentUser?.getIdToken();
+          if (!token) return;
+          const res = await fetch('/api/assets?limit=100', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data?.assets) && data.assets.length > 0) {
+              S.assets = data.assets;
+              persist();
+              render(true);
+            }
+          }
+        } catch (e) {
+          console.warn('Asset sync notice:', e.message);
         }
       })();
     }
@@ -1075,20 +1096,53 @@ export default function AdminDashboard({ onLogout, user }) {
           </form>`
         );
         $('#na-c').onchange = (e) => { $('#na-i').value = nextId(e.target.value); };
-        $('#naf').onsubmit = (e) => {
+        $('#naf').onsubmit = async (e) => {
           e.preventDefault();
           const id = $('#na-i').value.trim().toUpperCase();
           if (assetById(id)) {
             toast(`${id} already exists`);
             return;
           }
-          S.assets.push({
+
+          const newAssetObj = {
+            assetId: id,
             id,
+            name: `${$('#na-c').value} Asset ${id}`,
+            category: $('#na-c').value,
             type: $('#na-c').value,
+            location: 'Main Line',
             age: +$('#na-a').value,
+            lastInspectionDate: $('#na-m').value,
             last: $('#na-m').value,
             risk: clamp(+$('#na-r').value, 0, 100),
-          });
+          };
+
+          try {
+            const token = await auth?.currentUser?.getIdToken();
+            if (token) {
+              const res = await fetch('/api/assets', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify(newAssetObj),
+              });
+              if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                console.warn('Backend asset creation returned non-200:', errData?.error);
+              } else {
+                const created = await res.json().catch(() => ({}));
+                if (created?.asset) {
+                  Object.assign(newAssetObj, created.asset);
+                }
+              }
+            }
+          } catch (err) {
+            console.warn('Backend asset creation notice:', err.message);
+          }
+
+          S.assets.push(newAssetObj);
           persist();
           closeLayers();
           toast(`${id} added`);

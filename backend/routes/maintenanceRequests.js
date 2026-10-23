@@ -7,6 +7,7 @@ import MaintenanceRequest, {
 } from "../models/MaintenanceRequest.js";
 import { authenticateToken } from "../middleware/auth.js";
 import { connectDB } from "../db.js";
+import { findAsset } from "./assets.js";
 
 const router = Router();
 
@@ -107,6 +108,24 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Asset identifier is required." });
     }
 
+    const assetIdTrimmed = String(asset).trim();
+    const assetDoc = await findAsset(assetIdTrimmed);
+    let linkedAssetRef = null;
+
+    if (assetDoc) {
+      if (assetDoc.isDeleted || assetDoc.status === "Decommissioned" || assetDoc.status === "Inactive") {
+        return res.status(400).json({
+          error: `Asset '${assetIdTrimmed}' is inactive or decommissioned and cannot receive new maintenance requests.`,
+        });
+      }
+      if (assetDoc.department && dept && assetDoc.department !== dept) {
+        return res.status(400).json({
+          error: `Asset department '${assetDoc.department}' does not match request department '${dept}'.`,
+        });
+      }
+      linkedAssetRef = assetDoc._id;
+    }
+
     // 2. Validate Department
     if (!dept || !ALLOWED_DEPARTMENTS.includes(dept)) {
       return res.status(400).json({
@@ -159,7 +178,8 @@ router.post("/", async (req, res) => {
     // Create record: creator and status are determined by backend context, NEVER client input
     const newRequest = new MaintenanceRequest({
       id: uniqueId,
-      asset: String(asset).trim(),
+      asset: assetIdTrimmed,
+      assetRef: linkedAssetRef,
       dept,
       type: String(type).trim(),
       pri,

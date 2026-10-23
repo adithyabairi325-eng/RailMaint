@@ -23,6 +23,11 @@ const maintenanceRequestSchema = new mongoose.Schema(
       required: [true, "Asset ID is required"],
       trim: true,
     },
+    assetRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Asset",
+      default: null,
+    },
     dept: {
       type: String,
       required: [true, "Department is required"],
