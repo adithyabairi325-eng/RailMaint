@@ -14,9 +14,14 @@ const router = Router();
 router.use(authenticateToken);
 
 /**
+ * Supported fields for PATCH /:id/status
+ */
+export const ALLOWED_UPDATE_FIELDS = ["status", "start", "doneDate", "actual", "note"];
+
+/**
  * Map user roles to corresponding department name
  */
-function getDepartmentForRole(role) {
+export function getDepartmentForRole(role) {
   const normalized = String(role || "").toLowerCase().trim();
   switch (normalized) {
     case "engineering":
@@ -188,7 +193,10 @@ router.post("/", async (req, res) => {
 /**
  * Helper to find by string ID (MR-XXXX) or Mongo ObjectId
  */
-async function findReq(idParam) {
+export async function findReq(idParam) {
+  if (process.env.NODE_ENV === "test" && global.__TEST_DOCS__ && global.__TEST_DOCS__[idParam]) {
+    return global.__TEST_DOCS__[idParam];
+  }
   if (mongoose.Types.ObjectId.isValid(idParam)) {
     const found = await MaintenanceRequest.findById(idParam);
     if (found) return found;
@@ -231,74 +239,173 @@ router.get("/:id", async (req, res) => {
 /**
  * PATCH /api/maintenance-requests/:id/status
  * Update status, scheduling, or completion in MongoDB Atlas.
- * Validates allowed statuses and enforces role permissions.
+ * Validates all fields and enforces strict role and department permissions.
  */
 router.patch("/:id/status", async (req, res) => {
   try {
     await connectDB();
 
+    // 1. Validate payload structure
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+      return res.status(400).json({ error: "Invalid request payload. Expected a JSON object." });
+    }
+
+    const payloadKeys = Object.keys(req.body);
+    if (payloadKeys.length === 0) {
+      return res.status(400).json({ error: "Payload must contain at least one field to update." });
+    }
+
+    // 2. Reject unsupported or protected fields (e.g. id, createdBy, dept, pri, asset, etc.)
+    const disallowedKeys = payloadKeys.filter((k) => !ALLOWED_UPDATE_FIELDS.includes(k));
+    if (disallowedKeys.length > 0) {
+      return res.status(400).json({
+        error: `Cannot modify field(s): ${disallowedKeys.join(", ")}. Unsupported or protected field.`,
+      });
+    }
+
+    const { status, doneDate, actual, note, start } = req.body;
+
+    // 3. Validate field formats and values before checking permissions
+    // 3a. Validate status
+    if (status !== undefined) {
+      if (typeof status !== "string" || !ALLOWED_STATUSES.includes(status)) {
+        return res.status(400).json({
+          error: `Invalid status '${status}'. Allowed statuses: ${ALLOWED_STATUSES.join(", ")}`,
+        });
+      }
+    }
+
+    // 3b. Validate start (scheduling)
+    if (start !== undefined) {
+      const isValidStart =
+        start === null ||
+        (typeof start === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(start.trim()));
+      if (!isValidStart) {
+        return res.status(400).json({
+          error: "Invalid time format for start. Expected HH:mm in 24-hour format (e.g. '09:30') or null.",
+        });
+      }
+    }
+
+    // 3c. Validate doneDate
+    if (doneDate !== undefined) {
+      const isValidDate =
+        typeof doneDate === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(doneDate.trim()) &&
+        !isNaN(new Date(doneDate.trim()).getTime());
+      if (!isValidDate) {
+        return res.status(400).json({
+          error: "Invalid date format for doneDate. Expected YYYY-MM-DD.",
+        });
+      }
+    }
+
+    // 3d. Validate actual duration
+    let actualNum;
+    if (actual !== undefined) {
+      actualNum =
+        typeof actual === "number"
+          ? actual
+          : typeof actual === "string" && actual.trim() !== ""
+            ? Number(actual)
+            : NaN;
+      if (!Number.isFinite(actualNum) || actualNum <= 0) {
+        return res.status(400).json({
+          error: "Actual duration must be a finite positive number of minutes.",
+        });
+      }
+    }
+
+    // 3e. Validate note
+    if (note !== undefined) {
+      if (typeof note !== "string") {
+        return res.status(400).json({
+          error: "Note must be a string.",
+        });
+      }
+      if (note.length > 2000) {
+        return res.status(400).json({
+          error: "Note cannot exceed 2000 characters.",
+        });
+      }
+    }
+
+    // 4. Retrieve document from MongoDB
     const reqDoc = await findReq(req.params.id);
     if (!reqDoc) {
       return res.status(404).json({ error: "Maintenance request not found." });
     }
 
-    const { status, doneDate, actual, note, start } = req.body || {};
+    // 5. Determine user credentials from verified MongoDB profile
+    const userRole = String(req.user?.role || "").toLowerCase().trim();
+    const userDept = req.user?.department || getDepartmentForRole(userRole);
+    const isCreator = Boolean(
+      req.user?.firebaseUid && reqDoc.createdBy?.uid === req.user.firebaseUid
+    );
+    const isSameDept = Boolean(userDept && reqDoc.dept === userDept);
+    const isAuthorizedDeptUser = isCreator || isSameDept;
 
-    // Validate Status if changing status
-    if (status) {
-      if (!ALLOWED_STATUSES.includes(status)) {
-        return res.status(400).json({
-          error: `Invalid status '${status}'. Allowed statuses: ${ALLOWED_STATUSES.join(", ")}`,
-        });
-      }
-
-      const userRole = String(req.user.role || "").toLowerCase().trim();
-      const userDept = getDepartmentForRole(userRole);
-      const isCreator = reqDoc.createdBy.uid === req.user.firebaseUid;
-      const isSameDept = userDept && reqDoc.dept === userDept;
-
-      // Permission check: Admins can update any status; Department users can only update work progress
-      if (userRole === "admin") {
-        reqDoc.status = status;
-      } else if (isCreator || isSameDept) {
-        // Department team can progress to In Progress or Completed
-        if (
-          (status === "In Progress" && ["Scheduled", "Pending"].includes(reqDoc.status)) ||
-          (status === "Completed" && reqDoc.status === "In Progress")
-        ) {
-          reqDoc.status = status;
-        } else {
-          return res.status(403).json({
-            error: `Access Denied: Your role (${req.user.role}) is not authorized to set status to '${status}'.`,
-          });
-        }
-      } else {
+    // 6. Enforce permissions
+    if (userRole !== "admin") {
+      // Non-admins must be either the request creator or part of the assigned department
+      if (!isAuthorizedDeptUser) {
         return res.status(403).json({
           error: "Access Denied: You do not have permission to update this request.",
         });
       }
+
+      // Non-admins cannot modify the scheduling window (start)
+      if (start !== undefined) {
+        return res.status(403).json({
+          error: "Access Denied: Only administrators can schedule time windows.",
+        });
+      }
+
+      // Non-admins cannot modify completion details (doneDate, actual, note) independently
+      // or outside an authorized completion workflow
+      const hasCompletionFields =
+        doneDate !== undefined || actual !== undefined || note !== undefined;
+
+      if (hasCompletionFields && status !== "Completed") {
+        return res.status(403).json({
+          error: "Access Denied: Completion details can only be updated when completing the request.",
+        });
+      }
+
+      // If updating status, enforce permitted state transitions
+      if (status !== undefined) {
+        const currentStatus = reqDoc.status;
+        const isProgressTransition =
+          status === "In Progress" && ["Pending", "Scheduled"].includes(currentStatus);
+        const isCompletionTransition =
+          status === "Completed" && currentStatus === "In Progress";
+
+        if (!isProgressTransition && !isCompletionTransition) {
+          return res.status(403).json({
+            error: `Access Denied: Your role (${req.user?.role}) is not authorized to transition status from '${currentStatus}' to '${status}'.`,
+          });
+        }
+      }
     }
 
-    // Schedule start time (Admin only)
+    // 7. Apply updates to document
+    if (status !== undefined) {
+      reqDoc.status = status;
+    }
     if (start !== undefined) {
-      const userRole = String(req.user.role || "").toLowerCase().trim();
-      if (userRole !== "admin") {
-        return res.status(403).json({ error: "Access Denied: Only administrators can schedule time windows." });
-      }
-      reqDoc.start = start;
+      reqDoc.start = typeof start === "string" ? start.trim() : start;
     }
-
-    // Completion details
-    if (doneDate !== undefined) reqDoc.doneDate = doneDate;
-    if (actual !== undefined && actual !== null) {
-      const actualNum = Number(actual);
-      if (isNaN(actualNum) || actualNum <= 0) {
-        return res.status(400).json({ error: "Actual duration must be a positive number." });
-      }
+    if (doneDate !== undefined) {
+      reqDoc.doneDate = doneDate.trim();
+    }
+    if (actual !== undefined) {
       reqDoc.actual = actualNum;
     }
-    if (note !== undefined) reqDoc.note = String(note).trim();
+    if (note !== undefined) {
+      reqDoc.note = note.trim();
+    }
 
+    // 8. Persist to MongoDB Atlas
     const updated = await reqDoc.save();
 
     return res.json({

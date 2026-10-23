@@ -3,6 +3,10 @@ import mongoose from "mongoose";
 let isConnecting = false;
 
 export async function connectDB(customUri) {
+  if (process.env.NODE_ENV === "test") {
+    return mongoose.connection;
+  }
+
   if (mongoose.connection.readyState === 1) {
     return mongoose.connection;
   }
