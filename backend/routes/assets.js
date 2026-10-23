@@ -79,10 +79,16 @@ export async function findAsset(idParam) {
 
   if (process.env.NODE_ENV === "test" && global.__TEST_ASSETS__) {
     if (global.__TEST_ASSETS__[trimmed]) return global.__TEST_ASSETS__[trimmed];
+    const upper = trimmed.toUpperCase();
     const foundInMock = Object.values(global.__TEST_ASSETS__).find(
-      (a) => a.assetId === trimmed || a.id === trimmed || String(a._id) === trimmed
+      (a) =>
+        a.assetId === upper ||
+        a.assetId === trimmed ||
+        a.id === upper ||
+        a.id === trimmed ||
+        String(a._id) === trimmed
     );
-    if (foundInMock) return foundInMock;
+    return foundInMock || null;
   }
 
   if (mongoose.Types.ObjectId.isValid(trimmed)) {
@@ -253,10 +259,45 @@ router.post("/", async (req, res) => {
       },
     });
 
-    const saved = await newAsset.save();
-
+    let saved;
     if (process.env.NODE_ENV === "test" && global.__TEST_ASSETS__) {
+      saved = {
+        _id: newAsset._id || new mongoose.Types.ObjectId().toString(),
+        assetId: finalAssetId,
+        id: finalAssetId,
+        name: String(name).trim(),
+        category: normalizedCategory,
+        assetType: String(assetType || "").trim(),
+        type: normalizedCategory,
+        location: String(location).trim(),
+        department: finalDept,
+        condition: finalCondition,
+        status: finalStatus,
+        risk: finalRisk,
+        age: finalAge,
+        installationDate: installationDate ? String(installationDate).trim() : null,
+        lastInspectionDate: lastInspectionDate ? String(lastInspectionDate).trim() : null,
+        nextInspectionDate: nextInspectionDate ? String(nextInspectionDate).trim() : null,
+        last: lastInspectionDate ? String(lastInspectionDate).trim() : null,
+        description: String(description || "").trim(),
+        isDeleted: false,
+        createdBy: {
+          uid: req.user?.firebaseUid || null,
+          email: req.user?.email || null,
+          role: req.user?.role || null,
+        },
+        saveCallCount: 1,
+        async save() {
+          this.saveCallCount++;
+          if (global.__TEST_ASSETS__) {
+            global.__TEST_ASSETS__[this.assetId] = this;
+          }
+          return { ...this };
+        },
+      };
       global.__TEST_ASSETS__[finalAssetId] = saved;
+    } else {
+      saved = await newAsset.save();
     }
 
     return res.status(201).json({

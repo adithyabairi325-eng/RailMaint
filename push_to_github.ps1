@@ -10,7 +10,7 @@ Write-Host "Staging all changes..." -ForegroundColor Cyan
 git add .
 
 Write-Host "Committing changes..." -ForegroundColor Cyan
-git commit -m "Implement Asset Management backend: Mongoose model, REST endpoints, maintenance history, and automated tests"
+git commit -m "Fix delete option for assets and maintenance requests with custom modal and robust ID handling"
 
 Write-Host "Configuring remote origin..." -ForegroundColor Cyan
 git remote set-url origin https://github.com/adithyabairi325-eng/RailMaint.git

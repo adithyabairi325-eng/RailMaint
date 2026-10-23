@@ -122,6 +122,7 @@ export default function AdminDashboard({ onLogout, user }) {
       check: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
       clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
       download: '<path d="M12 4v11M7 11l5 5 5-5M4 20h16"/>',
+      trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
       logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
     };
     const ic = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -230,8 +231,16 @@ export default function AdminDashboard({ onLogout, user }) {
       } catch {}
     }
 
-    const assetById = (id) => S.assets.find((a) => a.id === id);
-    const reqById = (id) => S.requests.find((r) => r.id === id);
+    const assetById = (id) => S.assets.find((a) => a.id === id || a.assetId === id || String(a._id) === id);
+    const reqById = (id) => S.requests.find((r) => r.id === id || String(r._id) === id);
+
+    const DEFAULT_ASSETS = [
+      { id: 'TRK_101', assetId: 'TRK_101', name: 'Track Section TRK_101', type: 'Track', category: 'Track', age: 4, last: addDays(TODAY, -20), risk: 28 },
+      { id: 'SIG_201', assetId: 'SIG_201', name: 'Interlocking Signal SIG_201', type: 'Signals & Communication', category: 'Signals & Communication', age: 3, last: addDays(TODAY, -45), risk: 42 },
+      { id: 'ELE_301', assetId: 'ELE_301', name: 'Traction Substation ELE_301', type: 'Electrical & Power', category: 'Electrical & Power', age: 6, last: addDays(TODAY, -15), risk: 65 },
+      { id: 'MEC_401', assetId: 'MEC_401', name: 'Switch Machine MEC_401', type: 'Mechanical', category: 'Mechanical', age: 2, last: addDays(TODAY, -10), risk: 18 },
+      { id: 'BRG_501', assetId: 'BRG_501', name: 'Steel Girder Bridge BRG_501', type: 'Bridges', category: 'Bridges', age: 8, last: addDays(TODAY, -60), risk: 78 },
+    ];
 
     function seed() {
       // Clear legacy demo mock datasets from localStorage
@@ -249,17 +258,16 @@ export default function AdminDashboard({ onLogout, user }) {
         }
       })();
 
-      if (saved && Array.isArray(saved.assets) && Array.isArray(saved.requests)) {
+      if (saved && Array.isArray(saved.assets) && saved.assets.length > 0) {
         S.assets = saved.assets;
-        S.requests = saved.requests;
+        S.requests = saved.requests || [];
         S.notifs = saved.notifs || [];
         S.riskHist = saved.riskHist || [];
         S.predHist = saved.predHist || [];
         S.hist = saved.hist || [];
       } else {
-        // Empty store: user adds assets and maintenance requests manually
-        S.assets = [];
-        S.requests = [];
+        S.assets = [...DEFAULT_ASSETS];
+        S.requests = (saved && Array.isArray(saved.requests)) ? saved.requests : [];
         S.hist = [];
         S.predHist = [];
         S.riskHist = [];
@@ -300,7 +308,13 @@ export default function AdminDashboard({ onLogout, user }) {
           if (res.ok) {
             const data = await res.json();
             if (Array.isArray(data?.assets) && data.assets.length > 0) {
-              S.assets = data.assets;
+              S.assets = data.assets.map((a) => ({
+                ...a,
+                id: a.id || a.assetId || a._id,
+                assetId: a.assetId || a.id || a._id,
+                type: a.type || a.category || a.assetType || 'Track',
+                last: a.last || a.lastInspectionDate || TODAY,
+              }));
               persist();
               render(true);
             }
@@ -400,6 +414,7 @@ export default function AdminDashboard({ onLogout, user }) {
         `<div class="btn-row gap" style="margin-top:22px">
           ${r.status === 'Completed' ? '' : `<button class="btn primary" data-complete="${r.id}">Mark as Done</button>`}
           <button class="btn" data-open-asset="${r.asset}">View asset</button>
+          <button class="btn danger-soft" data-delete-req="${r.id || r._id}">${ic('trash', 16)} Delete</button>
         </div>`
       );
     }
@@ -495,8 +510,89 @@ export default function AdminDashboard({ onLogout, user }) {
         `<h3>Maintenance history</h3>` +
         (hist.length ? `<ul class="list">${hist.map((h) => `<li><span>${esc(h.type)}</span><span class="muted small">${fmtD(h.date)}, ${h.dur} min</span></li>`).join('')}</ul>` : '<p class="muted">No completed maintenance recorded.</p>') +
         `<h3>Related requests</h3>` +
-        (rel.length ? `<ul class="list">${rel.map((r) => `<li class="click" data-open-req="${r.id}"><span><b>${r.id}</b> ${esc(r.type)}</span>${pill(r.status)}</li>`).join('')}</ul>` : '<p class="muted">No open requests.</p>')
+        (rel.length ? `<ul class="list">${rel.map((r) => `<li class="click" data-open-req="${r.id}"><span><b>${r.id}</b> ${esc(r.type)}</span>${pill(r.status)}</li>`).join('')}</ul>` : '<p class="muted">No open requests.</p>') +
+        `<div class="btn-row gap" style="margin-top:22px">
+          <button class="btn danger-soft" data-delete-asset="${a.id || a.assetId || a._id}">${ic('trash', 16)} Delete Asset</button>
+        </div>`
       );
+    }
+
+    function confirmDelete(title, message, onConfirm) {
+      openModal(
+        title,
+        `<div style="display:grid;gap:16px;padding:6px 0">
+          <p style="font-size:15px;color:var(--text);margin:0;line-height:1.5">${esc(message)}</p>
+          <div class="btn-row" style="justify-content:flex-end;gap:10px;margin-top:14px">
+            <button class="btn" type="button" id="cd-cancel">Cancel</button>
+            <button class="btn danger" type="button" id="cd-confirm">Delete</button>
+          </div>
+        </div>`
+      );
+      $('#cd-cancel').onclick = closeLayers;
+      $('#cd-confirm').onclick = () => {
+        closeLayers();
+        onConfirm();
+      };
+    }
+
+    function deleteAsset(id) {
+      if (!id) return;
+      const a = assetById(id);
+      const label = a ? `${a.id || a.assetId} (${a.type || a.category || 'Asset'})` : id;
+
+      confirmDelete('Delete Asset', `Are you sure you want to delete asset ${label}? This action cannot be undone.`, async () => {
+        try {
+          const token = await auth?.currentUser?.getIdToken();
+          if (token) {
+            const res = await fetch(`/api/assets/${encodeURIComponent(id)}`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!res.ok && res.status !== 404) {
+              const errData = await res.json().catch(() => ({}));
+              console.warn('Backend delete asset notice:', errData?.error);
+            }
+          }
+        } catch (err) {
+          console.warn('Backend delete asset notice:', err.message);
+        }
+
+        S.assets = S.assets.filter((item) => (item.id || item.assetId) !== id && item.assetId !== id && item.id !== id && String(item._id) !== id);
+        persist();
+        closeLayers();
+        toast(`Asset ${id} deleted.`);
+        render(true);
+      });
+    }
+
+    function deleteRequest(id) {
+      if (!id) return;
+      const r = reqById(id);
+      const label = r ? `${r.id} (${r.type || 'Request'} on ${r.asset || 'Asset'})` : id;
+
+      confirmDelete('Delete Maintenance Request', `Are you sure you want to delete maintenance request ${label}? This action cannot be undone.`, async () => {
+        try {
+          const token = await auth?.currentUser?.getIdToken();
+          if (token) {
+            const res = await fetch(`/api/maintenance-requests/${encodeURIComponent(id)}`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!res.ok && res.status !== 404) {
+              const errData = await res.json().catch(() => ({}));
+              console.warn('Backend delete request notice:', errData?.error);
+            }
+          }
+        } catch (err) {
+          console.warn('Backend delete request notice:', err.message);
+        }
+
+        S.requests = S.requests.filter((item) => item.id !== id && String(item._id) !== id);
+        persist();
+        closeLayers();
+        toast(`Request ${id} deleted.`);
+        render(true);
+      });
     }
 
     /* ---------- charts ---------- */
@@ -643,26 +739,36 @@ export default function AdminDashboard({ onLogout, user }) {
           <thead><tr><th>Request ID</th><th>Asset</th><th>Department</th><th>Priority</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>` +
           (rows.length ? rows.map((r) => {
+            const rId = r.id || r._id;
             const effectiveStatus = getRequestStatus(r);
             const isDone = r.status === 'Completed';
-            return `<tr class="clickable" tabindex="0" data-open-req="${r.id}">
-              <td class="id">${r.id}</td>
+            return `<tr class="clickable" tabindex="0" data-open-req="${rId}">
+              <td class="id">${rId}</td>
               <td>${r.asset}</td>
               <td>${r.dept}</td>
               <td>${pill(r.pri)}</td>
               <td class="num">${fmtD(r.date)}</td>
               <td>${pill(effectiveStatus)}</td>
               <td class="req-actions-cell">
-                <div class="btn-row req-actions">
+                <div class="btn-row req-actions" style="flex-wrap:nowrap;align-items:center">
                   ${isDone
                     ? `<span class="done-tag" title="Completed">${ic('check', 16)}Done</span>`
-                    : `<button class="btn sm primary mark-done-btn" data-complete="${r.id}" title="Mark as Done">${ic('check', 14)} Mark as Done</button>`}
-                  <button class="btn sm" data-open-req="${r.id}" title="View details">View</button>
+                    : `<button class="btn sm primary mark-done-btn" data-complete="${rId}" title="Mark as Done">${ic('check', 14)} Mark as Done</button>`}
+                  <button class="btn sm" data-open-req="${rId}" title="View details">View</button>
+                  <button class="btn-del-icon" data-delete-req="${rId}" title="Delete maintenance request" aria-label="Delete">${ic('trash', 16)}</button>
                 </div>
               </td>
             </tr>`;
           }).join('') : `<tr><td colspan="7" class="empty">No requests match these filters.</td></tr>`) +
           `</tbody></table>`;
+
+        $('#rq-t').querySelectorAll('[data-delete-req]').forEach((btn) => {
+          btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            deleteRequest(btn.getAttribute('data-delete-req'));
+          };
+        });
       };
       fill();
       $('#rq-q').oninput = (e) => { f.q = e.target.value; fill(); };
@@ -1056,16 +1162,32 @@ export default function AdminDashboard({ onLogout, user }) {
         $('#as-t').innerHTML = `<table style="min-width:760px">
           <thead><tr><th>Asset ID</th><th>Asset Type</th><th>Age</th><th>Last Maintenance</th><th>Condition</th><th>Risk Score</th><th>Actions</th></tr></thead>
           <tbody>` +
-          (rows.length ? rows.map((a) => `<tr class="clickable" tabindex="0" data-open-asset="${a.id}">
-            <td class="id">${a.id}</td>
-            <td>${a.type}</td>
-            <td>${a.age} years</td>
-            <td class="num">${fmtD(a.last)}</td>
-            <td>${pill(cond(a.risk))}</td>
-            <td class="num"><b>${a.risk}%</b></td>
-            <td><button class="btn sm" data-open-asset="${a.id}">View</button></td>
-          </tr>`).join('') : `<tr><td colspan="7" class="empty">No assets match these filters.</td></tr>`) +
+          (rows.length ? rows.map((a) => {
+            const aId = a.id || a.assetId || a._id;
+            return `<tr class="clickable" tabindex="0" data-open-asset="${aId}">
+              <td class="id">${aId}</td>
+              <td>${a.type || a.category || a.assetType || 'Track'}</td>
+              <td>${a.age ?? '—'} years</td>
+              <td class="num">${fmtD(a.last || a.lastInspectionDate)}</td>
+              <td>${pill(cond(a.risk))}</td>
+              <td class="num"><b>${a.risk ?? 0}%</b></td>
+              <td>
+                <div class="btn-row" style="flex-wrap:nowrap;align-items:center">
+                  <button class="btn sm" data-open-asset="${aId}">View</button>
+                  <button class="btn-del-icon" data-delete-asset="${aId}" title="Delete asset" aria-label="Delete">${ic('trash', 16)}</button>
+                </div>
+              </td>
+            </tr>`;
+          }).join('') : `<tr><td colspan="7" class="empty">No assets match these filters.</td></tr>`) +
           `</tbody></table>`;
+
+        $('#as-t').querySelectorAll('[data-delete-asset]').forEach((btn) => {
+          btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            deleteAsset(btn.getAttribute('data-delete-asset'));
+          };
+        });
       };
       fill();
       $('#as-q').oninput = (e) => { f.q = e.target.value; fill(); };
@@ -1823,6 +1945,20 @@ export default function AdminDashboard({ onLogout, user }) {
     const handleClick = (e) => {
       if (e.target.closest('[data-close]') || e.target.id === 'pl' || e.target.id === 'ml') {
         closeLayers();
+        return;
+      }
+      const delAsset = e.target.closest('[data-delete-asset]');
+      if (delAsset) {
+        e.preventDefault();
+        e.stopPropagation();
+        deleteAsset(delAsset.getAttribute('data-delete-asset') || delAsset.dataset.deleteAsset);
+        return;
+      }
+      const delReq = e.target.closest('[data-delete-req]');
+      if (delReq) {
+        e.preventDefault();
+        e.stopPropagation();
+        deleteRequest(delReq.getAttribute('data-delete-req') || delReq.dataset.deleteReq);
         return;
       }
       const dc = e.target.closest('[data-complete]');

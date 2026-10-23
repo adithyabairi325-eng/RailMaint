@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite frontend",
     "build": "vite build frontend",
-    "dev:backend": "node backend/index.js",
+    "dev:backend": "node --watch backend/index.js",
     "setup:admin": "node backend/scripts/setupAdmin.js",
     "test": "node --test backend/tests/*.test.js",
     "lint": "oxlint",

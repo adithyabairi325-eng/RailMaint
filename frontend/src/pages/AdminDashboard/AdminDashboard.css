@@ -120,6 +120,14 @@ textarea{resize:vertical;min-height:84px}
 .btn.primary{background:var(--orange);border-color:var(--orange);color:#fff;box-shadow:0 10px 22px rgba(255,112,15,.3),inset 0 1px 0 rgba(255,255,255,.35)}
 .btn.primary:hover{background:#F2660A}
 .btn.sm{min-height:36px;padding:5px 14px;font-size:14px;border-radius:11px}
+.btn.danger{background:#DC2626;border-color:#DC2626;color:#fff;box-shadow:0 4px 12px rgba(220,38,38,.25),inset 0 1px 0 rgba(255,255,255,.3)}
+.btn.danger:hover{background:#B91C1C;border-color:#B91C1C;color:#fff}
+.btn.danger-soft{background:#FFF1F0;border-color:rgba(220,38,38,.25);color:#DC2626;box-shadow:0 1px 3px rgba(220,38,38,.08)}
+.btn.danger-soft:hover{background:#FEE2E2;border-color:rgba(220,38,38,.45);color:#B91C1C}
+.btn-del-icon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;min-width:36px;min-height:36px;padding:0;border-radius:11px;border:1px solid rgba(220,38,38,.25);background:#FFF1F0;color:#DC2626;cursor:pointer;transition:all .15s ease;box-shadow:0 1px 3px rgba(220,38,38,.08);flex-shrink:0}
+.btn-del-icon:hover{background:#FEE2E2;border-color:rgba(220,38,38,.45);color:#B91C1C;transform:translateY(-1px);box-shadow:0 3px 8px rgba(220,38,38,.16)}
+.btn-del-icon:active{transform:translateY(0);background:#FECACA}
+.btn-del-icon svg,.btn-del-icon *{pointer-events:none;display:block}
 .btn:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .done-tag{display:inline-flex;align-items:center;gap:6px;color:var(--low);font-weight:800;font-size:14px;padding:0 6px}

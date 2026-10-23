@@ -129,6 +129,20 @@ describe("Maintenance Request Status & Authorization Security Tests", () => {
     return { status: res.status, data };
   }
 
+  async function deleteReq(id, user) {
+    const headers = {};
+    if (user) {
+      headers["x-test-user"] = JSON.stringify(user);
+      headers["authorization"] = "Bearer mock-token";
+    }
+    const res = await fetch(`${baseUrl}/api/maintenance-requests/${id}`, {
+      method: "DELETE",
+      headers,
+    });
+    const data = await res.json().catch(() => ({}));
+    return { status: res.status, data };
+  }
+
   // 1. Admin updates a request status successfully.
   it("Case 1: Admin updates a request status successfully", async () => {
     const doc = createMockDoc({ status: "Pending" });
@@ -411,5 +425,16 @@ describe("Maintenance Request Status & Authorization Security Tests", () => {
     const getRes = await getReq("MR-1001", engineeringUser);
     assert.equal(getRes.status, 200);
     assert.equal(getRes.data.request.status, "In Progress");
+  });
+
+  // 13. Delete a maintenance request successfully
+  it("Case 13: Delete maintenance request successfully", async () => {
+    const doc = createMockDoc({ id: "MR-1001", status: "Pending" });
+    global.__TEST_DOCS__["MR-1001"] = doc;
+
+    const res = await deleteReq("MR-1001", engineeringUser);
+    assert.equal(res.status, 200);
+    assert.equal(res.data.deleted, true);
+    assert.equal(global.__TEST_DOCS__["MR-1001"], undefined);
   });
 });
