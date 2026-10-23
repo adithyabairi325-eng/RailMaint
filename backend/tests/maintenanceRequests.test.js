@@ -45,6 +45,52 @@ describe("Maintenance Request Status & Authorization Security Tests", () => {
     status: "active",
   };
 
+  const mechanicalUser = {
+    firebaseUid: "mech-uid-1",
+    email: "mechanical@railmaint.com",
+    role: "mechanical",
+    department: "Mechanical",
+    status: "active",
+  };
+
+  const bridgesUser = {
+    firebaseUid: "brg-uid-1",
+    email: "bridges@railmaint.com",
+    role: "bridges",
+    department: "Bridges",
+    status: "active",
+  };
+
+  const electricalUser = {
+    firebaseUid: "ele-uid-1",
+    email: "electrical@railmaint.com",
+    role: "electrical",
+    department: "Electrical / Traction",
+    status: "active",
+  };
+
+  const unsupportedUser = {
+    firebaseUid: "unsupp-uid-1",
+    email: "unsupported@railmaint.com",
+    role: "auditor",
+    status: "active",
+  };
+
+  function createMockAsset(data = {}) {
+    const assetId = (data.assetId || "TRK-001").toUpperCase();
+    return {
+      _id: data._id || "6ada2d7624bc713348056701",
+      assetId,
+      id: assetId,
+      name: data.name || "Test Asset",
+      category: data.category || "Track",
+      department: data.department || "Engineering / Track",
+      status: data.status || "Active",
+      isDeleted: data.isDeleted || false,
+      ...data,
+    };
+  }
+
   function createMockDoc(overrides = {}) {
     const doc = {
       _id: "6ada2d7624bc713348056799",
@@ -99,7 +145,23 @@ describe("Maintenance Request Status & Authorization Security Tests", () => {
 
   beforeEach(() => {
     global.__TEST_DOCS__ = {};
+    global.__TEST_ASSETS__ = {};
   });
+
+  async function postReq(body, user) {
+    const headers = { "Content-Type": "application/json" };
+    if (user) {
+      headers["x-test-user"] = JSON.stringify(user);
+      headers["authorization"] = "Bearer mock-token";
+    }
+    const res = await fetch(`${baseUrl}/api/maintenance-requests`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { status: res.status, data };
+  }
 
   async function patchReq(id, body, user) {
     const headers = { "Content-Type": "application/json" };
@@ -123,6 +185,19 @@ describe("Maintenance Request Status & Authorization Security Tests", () => {
       headers["authorization"] = "Bearer mock-token";
     }
     const res = await fetch(`${baseUrl}/api/maintenance-requests/${id}`, {
+      headers,
+    });
+    const data = await res.json().catch(() => ({}));
+    return { status: res.status, data };
+  }
+
+  async function getRequestsList(queryParams = "", user = null) {
+    const headers = {};
+    if (user) {
+      headers["x-test-user"] = JSON.stringify(user);
+      headers["authorization"] = "Bearer mock-token";
+    }
+    const res = await fetch(`${baseUrl}/api/maintenance-requests${queryParams}`, {
       headers,
     });
     const data = await res.json().catch(() => ({}));
@@ -436,5 +511,282 @@ describe("Maintenance Request Status & Authorization Security Tests", () => {
     assert.equal(res.status, 200);
     assert.equal(res.data.deleted, true);
     assert.equal(global.__TEST_DOCS__["MR-1001"], undefined);
+  });
+
+  // 14. Reject creation when asset does not exist (404)
+  it("Case 14: Reject maintenance request creation for nonexistent asset with 404", async () => {
+    const payload = {
+      asset: "NONEXISTENT-999",
+      dept: "Engineering / Track",
+      type: "Track Inspection",
+      pri: "High",
+      date: "2026-05-10",
+      dur: 60,
+      desc: "Inspection for ghost asset",
+    };
+
+    const res = await postReq(payload, engineeringUser);
+    assert.equal(res.status, 404);
+    assert.match(res.data.error, /not found/i);
+    assert.equal(Object.keys(global.__TEST_DOCS__).length, 0);
+  });
+
+  // 15. Reject creation when asset is inactive or decommissioned (400)
+  it("Case 15: Reject maintenance request creation for inactive or decommissioned asset with 400", async () => {
+    global.__TEST_ASSETS__["TRK-DECOM"] = createMockAsset({
+      assetId: "TRK-DECOM",
+      department: "Engineering / Track",
+      status: "Decommissioned",
+      isDeleted: true,
+    });
+
+    const payload = {
+      asset: "TRK-DECOM",
+      dept: "Engineering / Track",
+      type: "Track Inspection",
+      pri: "Medium",
+      date: "2026-05-10",
+      dur: 60,
+      desc: "Attempt on decommissioned asset",
+    };
+
+    const res = await postReq(payload, engineeringUser);
+    assert.equal(res.status, 400);
+    assert.match(res.data.error, /inactive or decommissioned/i);
+  });
+
+  // 16. Reject creation when asset department does not match request department (400)
+  it("Case 16: Reject maintenance request when asset department does not match request department with 400", async () => {
+    global.__TEST_ASSETS__["TRK-001"] = createMockAsset({
+      assetId: "TRK-001",
+      department: "Engineering / Track",
+      status: "Active",
+    });
+
+    const payload = {
+      asset: "TRK-001",
+      dept: "Electrical / Traction",
+      type: "Overhead Wire Check",
+      pri: "High",
+      date: "2026-05-10",
+      dur: 60,
+      desc: "Mismatched department request",
+    };
+
+    const res = await postReq(payload, adminUser);
+    assert.equal(res.status, 400);
+    assert.match(res.data.error, /does not match request department/i);
+  });
+
+  // 17. Role-to-department authorization supports mechanical, bridges, and electrical roles
+  it("Case 17: Department roles (Mechanical, Bridges, Electrical) can create requests in their department", async () => {
+    // Mechanical asset & request
+    global.__TEST_ASSETS__["MEC-401"] = createMockAsset({
+      assetId: "MEC-401",
+      department: "Mechanical",
+      category: "Mechanical",
+      status: "Active",
+    });
+
+    const mechPayload = {
+      asset: "MEC-401",
+      dept: "Mechanical",
+      type: "Brake Overhaul",
+      pri: "High",
+      date: "2026-05-12",
+      dur: 120,
+      desc: "Inspect and replace bogie brakes",
+    };
+    const mechRes = await postReq(mechPayload, mechanicalUser);
+    assert.equal(mechRes.status, 201);
+    assert.equal(mechRes.data.request.dept, "Mechanical");
+
+    // Bridges asset & request
+    global.__TEST_ASSETS__["BRG-501"] = createMockAsset({
+      assetId: "BRG-501",
+      department: "Bridges",
+      category: "Bridges",
+      status: "Active",
+    });
+
+    const brgPayload = {
+      asset: "BRG-501",
+      dept: "Bridges",
+      type: "Girder Stress Test",
+      pri: "Medium",
+      date: "2026-05-14",
+      dur: 90,
+      desc: "Ultrasonic girder testing",
+    };
+    const brgRes = await postReq(brgPayload, bridgesUser);
+    assert.equal(brgRes.status, 201);
+    assert.equal(brgRes.data.request.dept, "Bridges");
+
+    // Electrical alias role creating Electrical / Traction
+    global.__TEST_ASSETS__["ELE-301"] = createMockAsset({
+      assetId: "ELE-301",
+      department: "Electrical / Traction",
+      category: "Electrical & Power",
+      status: "Active",
+    });
+
+    const elePayload = {
+      asset: "ELE-301",
+      dept: "Electrical / Traction",
+      type: "Catenary Maintenance",
+      pri: "High",
+      date: "2026-05-15",
+      dur: 60,
+      desc: "Overhead wire calibration",
+    };
+    const eleRes = await postReq(elePayload, electricalUser);
+    assert.equal(eleRes.status, 201);
+    assert.equal(eleRes.data.request.dept, "Electrical / Traction");
+  });
+
+  // 18. Passenger and unsupported roles fail closed
+  it("Case 18: Passenger and unsupported roles fail closed on create, patch, and delete", async () => {
+    global.__TEST_ASSETS__["TRK-001"] = createMockAsset({
+      assetId: "TRK-001",
+      department: "Engineering / Track",
+      status: "Active",
+    });
+
+    const payload = {
+      asset: "TRK-001",
+      dept: "Engineering / Track",
+      type: "Track Inspection",
+      pri: "Medium",
+      date: "2026-05-10",
+      dur: 60,
+      desc: "Test unauthorized create",
+    };
+
+    // Passenger cannot create
+    const passCreate = await postReq(payload, passengerUser);
+    assert.equal(passCreate.status, 403);
+    assert.match(passCreate.data.error, /passengers are not permitted/i);
+
+    // Unsupported role cannot create (fails closed)
+    const unsuppCreate = await postReq(payload, unsupportedUser);
+    assert.equal(unsuppCreate.status, 403);
+    assert.match(unsuppCreate.data.error, /not authorized/i);
+
+    // Passenger cannot patch status
+    const doc = createMockDoc({ id: "MR-9001", status: "Pending" });
+    global.__TEST_DOCS__["MR-9001"] = doc;
+
+    const passPatch = await patchReq("MR-9001", { status: "In Progress" }, passengerUser);
+    assert.equal(passPatch.status, 403);
+    assert.match(passPatch.data.error, /passengers are not permitted/i);
+
+    // Passenger cannot delete
+    const passDelete = await deleteReq("MR-9001", passengerUser);
+    assert.equal(passDelete.status, 403);
+    assert.match(passDelete.data.error, /passengers are not permitted/i);
+  });
+
+  // 19. Strict date validation on create rejects impossible and malformed dates
+  it("Case 19: Strict date validation on create rejects impossible calendar dates and malformed strings", async () => {
+    global.__TEST_ASSETS__["TRK-001"] = createMockAsset({
+      assetId: "TRK-001",
+      department: "Engineering / Track",
+      status: "Active",
+    });
+
+    const basePayload = {
+      asset: "TRK-001",
+      dept: "Engineering / Track",
+      type: "Track Inspection",
+      pri: "Medium",
+      dur: 60,
+      desc: "Date validation test",
+    };
+
+    // Impossible calendar date: Feb 30
+    const resFeb30 = await postReq({ ...basePayload, date: "2026-02-30" }, engineeringUser);
+    assert.equal(resFeb30.status, 400);
+    assert.match(resFeb30.data.error, /valid target date/i);
+
+    // Impossible calendar date: Non-leap year Feb 29
+    const resNonLeap = await postReq({ ...basePayload, date: "2025-02-29" }, engineeringUser);
+    assert.equal(resNonLeap.status, 400);
+    assert.match(resNonLeap.data.error, /valid target date/i);
+
+    // Impossible month: 13
+    const resMonth13 = await postReq({ ...basePayload, date: "2026-13-01" }, engineeringUser);
+    assert.equal(resMonth13.status, 400);
+
+    // Malformed string format (slashes instead of dashes)
+    const resSlash = await postReq({ ...basePayload, date: "2026/04/18" }, engineeringUser);
+    assert.equal(resSlash.status, 400);
+
+    // Valid leap year Feb 29 accepted
+    const resLeap = await postReq({ ...basePayload, date: "2024-02-29" }, engineeringUser);
+    assert.equal(resLeap.status, 201);
+  });
+
+  // 20. Concurrent request ID collision is handled safely via bounded retry
+  it("Case 20: Concurrent request ID collision handled safely with bounded retry", async () => {
+    global.__TEST_ASSETS__["TRK-001"] = createMockAsset({
+      assetId: "TRK-001",
+      department: "Engineering / Track",
+      status: "Active",
+    });
+
+    const payload = {
+      asset: "TRK-001",
+      dept: "Engineering / Track",
+      type: "Track Inspection",
+      pri: "Medium",
+      date: "2026-05-18",
+      dur: 60,
+      desc: "Collision retry test",
+    };
+
+    // Simulate collision on first attempt
+    global.__TEST_FORCE_MR_COLLISION__ = true;
+
+    const res = await postReq(payload, engineeringUser);
+    assert.equal(res.status, 201);
+    assert.ok(res.data.request.id);
+  });
+
+  // 21. Cross-department access for Admin and department-specific filtering
+  it("Case 21: Admin can access requests across all departments, and department filtering works", async () => {
+    global.__TEST_DOCS__["MR-TRACK"] = createMockDoc({
+      id: "MR-TRACK",
+      dept: "Engineering / Track",
+    });
+    global.__TEST_DOCS__["MR-MECH"] = createMockDoc({
+      id: "MR-MECH",
+      dept: "Mechanical",
+    });
+    global.__TEST_DOCS__["MR-BRG"] = createMockDoc({
+      id: "MR-BRG",
+      dept: "Bridges",
+    });
+
+    // Admin sees all 3 requests
+    const resAdmin = await getRequestsList("", adminUser);
+    assert.equal(resAdmin.status, 200);
+    assert.equal(resAdmin.data.count, 3);
+
+    // Mechanical user only sees Mechanical requests (and any they created)
+    const resMech = await getRequestsList("", mechanicalUser);
+    assert.equal(resMech.status, 200);
+    assert.equal(resMech.data.count, 1);
+    assert.equal(resMech.data.requests[0].dept, "Mechanical");
+
+    // Filter by department query
+    const resFilter = await getRequestsList("?dept=Bridges", adminUser);
+    assert.equal(resFilter.status, 200);
+    assert.equal(resFilter.data.count, 1);
+    assert.equal(resFilter.data.requests[0].dept, "Bridges");
+
+    // Filter yielding empty results
+    const resEmpty = await getRequestsList("?dept=NonexistentDept", adminUser);
+    assert.equal(resEmpty.status, 200);
+    assert.equal(resEmpty.data.count, 0);
   });
 });

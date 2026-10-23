@@ -24,6 +24,16 @@ export const CATEGORY_DEPARTMENT_MAP = {
   "Bridges": "Bridges",
 };
 
+/**
+ * Validate that an asset category belongs to its corresponding department.
+ */
+export function isValidCategoryDepartment(category, department) {
+  if (!category || !department) return false;
+  const normCategory = CATEGORY_ALIASES[category] || category;
+  const expectedDept = CATEGORY_DEPARTMENT_MAP[normCategory];
+  return expectedDept === department;
+}
+
 export const CATEGORY_PREFIX_MAP = {
   "Track": "TRK",
   "Signals & Communication": "SIG",

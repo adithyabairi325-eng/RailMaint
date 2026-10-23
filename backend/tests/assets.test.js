@@ -543,4 +543,286 @@ describe("Asset Management Backend API & Integration Tests", () => {
     assert.equal(res.status, 200);
     assert.equal(doc.status, "In Progress");
   });
+
+  // 15. Category and department consistency on creation
+  it("Case 15: Category and department consistency on asset creation", async () => {
+    // Inconsistent category & department -> 400
+    const resInconsistent = await apiCall(
+      "/api/assets",
+      "POST",
+      {
+        name: "Conflicted Asset",
+        category: "Track",
+        department: "Electrical / Traction",
+        location: "Platform 1",
+      },
+      adminUser
+    );
+    assert.equal(resInconsistent.status, 400);
+    assert.match(resInconsistent.data.error, /not compatible with department/i);
+
+    // Consistent Mechanical asset -> 201
+    const resMech = await apiCall(
+      "/api/assets",
+      "POST",
+      {
+        name: "Wheel Lathe 1",
+        category: "Mechanical",
+        department: "Mechanical",
+        location: "Depot Bay 4",
+      },
+      adminUser
+    );
+    assert.equal(resMech.status, 201);
+    assert.equal(resMech.data.asset.department, "Mechanical");
+
+    // Consistent Bridges asset -> 201
+    const resBrg = await apiCall(
+      "/api/assets",
+      "POST",
+      {
+        name: "Ganga Rail Bridge Pier 5",
+        category: "Bridges",
+        department: "Bridges",
+        location: "KM 42.0",
+      },
+      adminUser
+    );
+    assert.equal(resBrg.status, 201);
+    assert.equal(resBrg.data.asset.department, "Bridges");
+  });
+
+  // 16. Category and department consistency on updates (partial updates)
+  it("Case 16: Category and department consistency on partial updates", async () => {
+    const doc = createMockAssetDoc({
+      assetId: "TRK-201",
+      name: "Track Switch Point",
+      category: "Track",
+      department: "Engineering / Track",
+    });
+    global.__TEST_ASSETS__["TRK-201"] = doc;
+
+    // Partial update: updating department to incompatible value leaves asset inconsistent -> 400
+    const resIncompDept = await apiCall(
+      "/api/assets/TRK-201",
+      "PATCH",
+      { department: "Signal & Telecom" },
+      adminUser
+    );
+    assert.equal(resIncompDept.status, 400);
+    assert.match(resIncompDept.data.error, /not compatible with department/i);
+    assert.equal(doc.department, "Engineering / Track");
+
+    // Partial update: updating category to incompatible value leaves asset inconsistent -> 400
+    const resIncompCat = await apiCall(
+      "/api/assets/TRK-201",
+      "PATCH",
+      { category: "Mechanical" },
+      adminUser
+    );
+    assert.equal(resIncompCat.status, 400);
+    assert.match(resIncompCat.data.error, /not compatible with department/i);
+    assert.equal(doc.category, "Track");
+
+    // Full consistent update: both category and department updated together -> 200
+    const resCompBoth = await apiCall(
+      "/api/assets/TRK-201",
+      "PATCH",
+      {
+        category: "Signals & Communication",
+        department: "Signal & Telecom",
+      },
+      adminUser
+    );
+    assert.equal(resCompBoth.status, 200);
+    assert.equal(doc.category, "Signals & Communication");
+    assert.equal(doc.department, "Signal & Telecom");
+  });
+
+  // 17. Strict date validation on asset creation and updates
+  it("Case 17: Strict date validation on asset creation and update rejects impossible and malformed dates", async () => {
+    const baseCreate = {
+      name: "Date Test Asset",
+      category: "Track",
+      location: "Main Line",
+    };
+
+    // Impossible calendar date: Feb 30
+    const resFeb30 = await apiCall(
+      "/api/assets",
+      "POST",
+      { ...baseCreate, installationDate: "2026-02-30" },
+      adminUser
+    );
+    assert.equal(resFeb30.status, 400);
+    assert.match(resFeb30.data.error, /invalid installationDate/i);
+
+    // Impossible month: 13
+    const resMonth13 = await apiCall(
+      "/api/assets",
+      "POST",
+      { ...baseCreate, lastInspectionDate: "2026-13-01" },
+      adminUser
+    );
+    assert.equal(resMonth13.status, 400);
+    assert.match(resMonth13.data.error, /invalid lastInspectionDate/i);
+
+    // Malformed string
+    const resBadFormat = await apiCall(
+      "/api/assets",
+      "POST",
+      { ...baseCreate, nextInspectionDate: "2026/06/10" },
+      adminUser
+    );
+    assert.equal(resBadFormat.status, 400);
+    assert.match(resBadFormat.data.error, /invalid nextInspectionDate/i);
+
+    // Valid dates create successfully
+    const resValid = await apiCall(
+      "/api/assets",
+      "POST",
+      {
+        ...baseCreate,
+        installationDate: "2024-02-29", // Valid leap year
+        lastInspectionDate: "2026-01-15",
+        nextInspectionDate: "2026-06-15",
+      },
+      adminUser
+    );
+    assert.equal(resValid.status, 201);
+
+    // Test invalid date update on existing asset -> 400
+    const doc = createMockAssetDoc({ assetId: "TRK-DATE-1" });
+    global.__TEST_ASSETS__["TRK-DATE-1"] = doc;
+
+    const resPatchBadDate = await apiCall(
+      "/api/assets/TRK-DATE-1",
+      "PATCH",
+      { lastInspectionDate: "2025-02-29" }, // 2025 is not a leap year!
+      adminUser
+    );
+    assert.equal(resPatchBadDate.status, 400);
+    assert.match(resPatchBadDate.data.error, /invalid lastInspectionDate/i);
+  });
+
+  // 18. Search and location filters with regex character escaping and empty results
+  it("Case 18: Search and location filters handle special regex characters safely and return empty results when not matched", async () => {
+    global.__TEST_ASSETS__["TRK-LOC-1"] = createMockAssetDoc({
+      assetId: "TRK-LOC-1",
+      name: "Main Line [Section A]",
+      location: "Platform (North)",
+      department: "Engineering / Track",
+    });
+
+    // Location query matching
+    const resLoc = await apiCall(
+      "/api/assets?location=Platform (North)",
+      "GET",
+      null,
+      adminUser
+    );
+    assert.equal(resLoc.status, 200);
+    assert.equal(resLoc.data.assets.length, 1);
+    assert.equal(resLoc.data.assets[0].assetId, "TRK-LOC-1");
+
+    // Search query with regex special chars `[` and `]`
+    const resSearch = await apiCall(
+      "/api/assets?search=[Section A]",
+      "GET",
+      null,
+      adminUser
+    );
+    assert.equal(resSearch.status, 200);
+    assert.equal(resSearch.data.assets.length, 1);
+    assert.equal(resSearch.data.assets[0].assetId, "TRK-LOC-1");
+
+    // Empty search results
+    const resEmpty = await apiCall(
+      "/api/assets?search=NonExistentQueryXYZ999",
+      "GET",
+      null,
+      adminUser
+    );
+    assert.equal(resEmpty.status, 200);
+    assert.equal(resEmpty.data.assets.length, 0);
+    assert.equal(resEmpty.data.total, 0);
+  });
+
+  // 19. Department filtering on asset list
+  it("Case 19: Department filtering on asset list", async () => {
+    global.__TEST_ASSETS__["MEC-1"] = createMockAssetDoc({
+      assetId: "MEC-1",
+      department: "Mechanical",
+      category: "Mechanical",
+    });
+    global.__TEST_ASSETS__["BRG-1"] = createMockAssetDoc({
+      assetId: "BRG-1",
+      department: "Bridges",
+      category: "Bridges",
+    });
+
+    const resDept = await apiCall(
+      "/api/assets?department=Mechanical",
+      "GET",
+      null,
+      adminUser
+    );
+    assert.equal(resDept.status, 200);
+    assert.equal(resDept.data.assets.length, 1);
+    assert.equal(resDept.data.assets[0].assetId, "MEC-1");
+  });
+
+  // 20. Asset ID collision handled safely via bounded retry
+  it("Case 20: Asset ID collision handled safely with bounded retry", async () => {
+    global.__TEST_FORCE_ASSET_COLLISION__ = true;
+
+    const payload = {
+      name: "Collision Track",
+      category: "Track",
+      location: "Main Line KM 10",
+    };
+
+    const res = await apiCall("/api/assets", "POST", payload, adminUser);
+    assert.equal(res.status, 201);
+    assert.ok(res.data.asset.assetId);
+  });
+
+  // 21. Admin cross-department visibility across all asset departments
+  it("Case 21: Admin has cross-department visibility across all departments", async () => {
+    global.__TEST_ASSETS__["TRK-A"] = createMockAssetDoc({
+      assetId: "TRK-A",
+      department: "Engineering / Track",
+      category: "Track",
+    });
+    global.__TEST_ASSETS__["ELE-A"] = createMockAssetDoc({
+      assetId: "ELE-A",
+      department: "Electrical / Traction",
+      category: "Electrical & Power",
+    });
+    global.__TEST_ASSETS__["SIG-A"] = createMockAssetDoc({
+      assetId: "SIG-A",
+      department: "Signal & Telecom",
+      category: "Signals & Communication",
+    });
+    global.__TEST_ASSETS__["MEC-A"] = createMockAssetDoc({
+      assetId: "MEC-A",
+      department: "Mechanical",
+      category: "Mechanical",
+    });
+    global.__TEST_ASSETS__["BRG-A"] = createMockAssetDoc({
+      assetId: "BRG-A",
+      department: "Bridges",
+      category: "Bridges",
+    });
+
+    const res = await apiCall("/api/assets", "GET", null, adminUser);
+    assert.equal(res.status, 200);
+    assert.equal(res.data.total, 5);
+    const depts = res.data.assets.map((a) => a.department);
+    assert.ok(depts.includes("Engineering / Track"));
+    assert.ok(depts.includes("Electrical / Traction"));
+    assert.ok(depts.includes("Signal & Telecom"));
+    assert.ok(depts.includes("Mechanical"));
+    assert.ok(depts.includes("Bridges"));
+  });
 });

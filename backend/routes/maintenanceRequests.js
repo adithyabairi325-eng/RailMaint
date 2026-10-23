@@ -20,6 +20,31 @@ router.use(authenticateToken);
 export const ALLOWED_UPDATE_FIELDS = ["status", "start", "doneDate", "actual", "note"];
 
 /**
+ * Strict calendar date validator for YYYY-MM-DD.
+ * Rejects malformed strings and impossible calendar dates (e.g. Feb 30, non-leap year Feb 29, April 31).
+ */
+export function isValidDateString(str) {
+  if (typeof str !== "string") return false;
+  const trimmed = str.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return false;
+
+  const [yStr, mStr, dStr] = trimmed.split("-");
+  const year = parseInt(yStr, 10);
+  const month = parseInt(mStr, 10);
+  const day = parseInt(dStr, 10);
+
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > 31) return false;
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+/**
  * Map user roles to corresponding department name
  */
 export function getDepartmentForRole(role) {
@@ -28,16 +53,23 @@ export function getDepartmentForRole(role) {
     case "engineering":
       return "Engineering / Track";
     case "traction":
+    case "electrical":
       return "Electrical / Traction";
     case "signal":
+    case "telecom":
       return "Signal & Telecom";
+    case "mechanical":
+      return "Mechanical";
+    case "bridges":
+    case "bridge":
+      return "Bridges";
     default:
       return null;
   }
 }
 
 /**
- * Safely generate the next sequential unique request ID (e.g. MR-1001, MR-1002)
+ * Safely generate the next sequential unique request ID (e.g. MR-1001, MR-1002) with bounded attempts
  */
 async function generateUniqueRequestId() {
   if (process.env.NODE_ENV === "test" && global.__TEST_DOCS__) {
@@ -64,9 +96,12 @@ async function generateUniqueRequestId() {
   let candidateNum = (nums.length ? Math.max(...nums) : 1000) + 1;
   let candidateId = `MR-${candidateNum}`;
 
-  while (await MaintenanceRequest.exists({ id: candidateId })) {
+  let attempts = 0;
+  const MAX_ATTEMPTS = 50;
+  while (attempts < MAX_ATTEMPTS && (await MaintenanceRequest.exists({ id: candidateId }))) {
     candidateNum++;
     candidateId = `MR-${candidateNum}`;
+    attempts++;
   }
 
   return candidateId;
@@ -85,12 +120,31 @@ router.get("/", async (req, res) => {
 
     // Restrict access by role and department
     if (userRole !== "admin") {
-      const userDept = getDepartmentForRole(userRole);
+      const userDept = req.user?.department || getDepartmentForRole(userRole);
       if (userDept) {
         query.$or = [{ dept: userDept }, { "createdBy.uid": req.user.firebaseUid }];
       } else {
         query["createdBy.uid"] = req.user.firebaseUid;
       }
+    }
+
+    if (process.env.NODE_ENV === "test" && global.__TEST_DOCS__) {
+      const all = Object.values(global.__TEST_DOCS__);
+      const filtered = all.filter((r) => {
+        if (userRole !== "admin") {
+          const userDept = req.user?.department || getDepartmentForRole(userRole);
+          const isCreator = r.createdBy?.uid === req.user?.firebaseUid;
+          const isDept = userDept && r.dept === userDept;
+          if (!isCreator && !isDept) return false;
+        }
+        if (req.query.dept && r.dept !== req.query.dept) return false;
+        if (req.query.status && r.status !== req.query.status) return false;
+        return true;
+      });
+      return res.json({
+        requests: filtered,
+        count: filtered.length,
+      });
     }
 
     const requests = await MaintenanceRequest.find(query).sort({ createdAt: -1 });
@@ -116,27 +170,22 @@ router.post("/", async (req, res) => {
 
     const { asset, dept, type, pri, date, dur, desc } = req.body || {};
 
-    // 1. Validate Asset
+    // 1. Validate Asset existence and status
     if (!asset || !String(asset).trim()) {
       return res.status(400).json({ error: "Asset identifier is required." });
     }
 
     const assetIdTrimmed = String(asset).trim();
     const assetDoc = await findAsset(assetIdTrimmed);
-    let linkedAssetRef = null;
 
-    if (assetDoc) {
-      if (assetDoc.isDeleted || assetDoc.status === "Decommissioned" || assetDoc.status === "Inactive") {
-        return res.status(400).json({
-          error: `Asset '${assetIdTrimmed}' is inactive or decommissioned and cannot receive new maintenance requests.`,
-        });
-      }
-      if (assetDoc.department && dept && assetDoc.department !== dept) {
-        return res.status(400).json({
-          error: `Asset department '${assetDoc.department}' does not match request department '${dept}'.`,
-        });
-      }
-      linkedAssetRef = assetDoc._id;
+    if (!assetDoc) {
+      return res.status(404).json({ error: `Asset '${assetIdTrimmed}' not found.` });
+    }
+
+    if (assetDoc.isDeleted || assetDoc.status === "Decommissioned" || assetDoc.status === "Inactive") {
+      return res.status(400).json({
+        error: `Asset '${assetIdTrimmed}' is inactive or decommissioned and cannot receive new maintenance requests.`,
+      });
     }
 
     // 2. Validate Department
@@ -146,13 +195,34 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // Asset department must match request department
+    if (assetDoc.department && assetDoc.department !== dept) {
+      return res.status(400).json({
+        error: `Asset department '${assetDoc.department}' does not match request department '${dept}'.`,
+      });
+    }
+
+    const linkedAssetRef = assetDoc._id;
+    const finalAssetIdentifier = assetDoc.assetId || assetIdTrimmed;
+
     // Role-based department check: non-admins can only create requests for their own department
-    const userRole = String(req.user.role || "").toLowerCase().trim();
+    const userRole = String(req.user?.role || "").toLowerCase().trim();
+    if (userRole === "passenger") {
+      return res.status(403).json({
+        error: "Access Denied: Passengers are not permitted to submit internal maintenance requests.",
+      });
+    }
+
     if (userRole !== "admin") {
-      const permittedDept = getDepartmentForRole(userRole);
-      if (permittedDept && dept !== permittedDept) {
+      const permittedDept = req.user?.department || getDepartmentForRole(userRole);
+      if (!permittedDept) {
         return res.status(403).json({
-          error: `Access Denied: Your role (${req.user.role}) can only submit requests for ${permittedDept}.`,
+          error: `Access Denied: Role '${req.user?.role}' is not authorized to create maintenance requests.`,
+        });
+      }
+      if (dept !== permittedDept) {
+        return res.status(403).json({
+          error: `Access Denied: Your role (${req.user?.role}) can only submit requests for ${permittedDept}.`,
         });
       }
     }
@@ -169,8 +239,8 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 5. Validate Date
-    if (!date || !String(date).trim() || isNaN(new Date(date).getTime())) {
+    // 5. Validate Date strictly
+    if (!date || !isValidDateString(date)) {
       return res.status(400).json({ error: "A valid target date (YYYY-MM-DD) is required." });
     }
 
@@ -185,38 +255,18 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Description is required." });
     }
 
-    // Safe backend ID generation
-    const uniqueId = await generateUniqueRequestId();
+    // Bounded retry loop for concurrent unique ID generation and MongoDB duplicate-key handling
+    const MAX_RETRIES = 5;
+    let saved = null;
+    let lastError = null;
 
-    // Create record: creator and status are determined by backend context, NEVER client input
-    const newRequest = new MaintenanceRequest({
-      id: uniqueId,
-      asset: assetIdTrimmed,
-      assetRef: linkedAssetRef,
-      dept,
-      type: String(type).trim(),
-      pri,
-      date: String(date).trim(),
-      dur: durationNum,
-      desc: String(desc).trim(),
-      status: "Pending", // Always starts as Pending
-      start: null,
-      doneDate: null,
-      actual: null,
-      note: "",
-      createdBy: {
-        uid: req.user.firebaseUid,
-        email: req.user.email,
-        role: req.user.role,
-      },
-    });
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      const uniqueId = await generateUniqueRequestId();
 
-    let saved;
-    if (process.env.NODE_ENV === "test" && global.__TEST_DOCS__) {
-      saved = {
-        _id: newRequest._id || new mongoose.Types.ObjectId().toString(),
+      // Create record: creator and status are determined by backend context, NEVER client input
+      const newRequest = new MaintenanceRequest({
         id: uniqueId,
-        asset: assetIdTrimmed,
+        asset: finalAssetIdentifier,
         assetRef: linkedAssetRef,
         dept,
         type: String(type).trim(),
@@ -224,7 +274,7 @@ router.post("/", async (req, res) => {
         date: String(date).trim(),
         dur: durationNum,
         desc: String(desc).trim(),
-        status: "Pending",
+        status: "Pending", // Always starts as Pending
         start: null,
         doneDate: null,
         actual: null,
@@ -234,18 +284,64 @@ router.post("/", async (req, res) => {
           email: req.user.email,
           role: req.user.role,
         },
-        saveCallCount: 1,
-        async save() {
-          this.saveCallCount++;
-          if (global.__TEST_DOCS__) {
-            global.__TEST_DOCS__[this.id] = this;
+      });
+
+      try {
+        if (process.env.NODE_ENV === "test" && global.__TEST_DOCS__) {
+          if (global.__TEST_FORCE_MR_COLLISION__ && attempt === 1) {
+            global.__TEST_FORCE_MR_COLLISION__ = false;
+            const dupErr = new Error("E11000 duplicate key error collection");
+            dupErr.code = 11000;
+            throw dupErr;
           }
-          return { ...this };
-        },
-      };
-      global.__TEST_DOCS__[uniqueId] = saved;
-    } else {
-      saved = await newRequest.save();
+          saved = {
+            _id: newRequest._id || new mongoose.Types.ObjectId().toString(),
+            id: uniqueId,
+            asset: finalAssetIdentifier,
+            assetRef: linkedAssetRef,
+            dept,
+            type: String(type).trim(),
+            pri,
+            date: String(date).trim(),
+            dur: durationNum,
+            desc: String(desc).trim(),
+            status: "Pending",
+            start: null,
+            doneDate: null,
+            actual: null,
+            note: "",
+            createdBy: {
+              uid: req.user.firebaseUid,
+              email: req.user.email,
+              role: req.user.role,
+            },
+            saveCallCount: 1,
+            async save() {
+              this.saveCallCount++;
+              if (global.__TEST_DOCS__) {
+                global.__TEST_DOCS__[this.id] = this;
+              }
+              return { ...this };
+            },
+          };
+          global.__TEST_DOCS__[uniqueId] = saved;
+          break;
+        } else {
+          saved = await newRequest.save();
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+        if (err?.code === 11000 && attempt < MAX_RETRIES) {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (!saved) {
+      console.error("Exhausted retries generating unique request ID:", lastError?.message);
+      return res.status(500).json({ error: "Failed to generate unique maintenance request ID after retries." });
     }
 
     return res.status(201).json({
@@ -365,13 +461,9 @@ router.patch("/:id/status", async (req, res) => {
 
     // 3c. Validate doneDate
     if (doneDate !== undefined) {
-      const isValidDate =
-        typeof doneDate === "string" &&
-        /^\d{4}-\d{2}-\d{2}$/.test(doneDate.trim()) &&
-        !isNaN(new Date(doneDate.trim()).getTime());
-      if (!isValidDate) {
+      if (!isValidDateString(doneDate)) {
         return res.status(400).json({
-          error: "Invalid date format for doneDate. Expected YYYY-MM-DD.",
+          error: "Invalid date format for doneDate. Expected valid calendar date in YYYY-MM-DD format.",
         });
       }
     }
@@ -414,6 +506,11 @@ router.patch("/:id/status", async (req, res) => {
 
     // 5. Determine user credentials from verified MongoDB profile
     const userRole = String(req.user?.role || "").toLowerCase().trim();
+    if (userRole === "passenger") {
+      return res.status(403).json({
+        error: "Access Denied: Passengers are not permitted to update maintenance requests.",
+      });
+    }
     const userDept = req.user?.department || getDepartmentForRole(userRole);
     const isCreator = Boolean(
       req.user?.firebaseUid && reqDoc.createdBy?.uid === req.user.firebaseUid

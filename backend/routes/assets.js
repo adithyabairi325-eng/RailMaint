@@ -7,16 +7,24 @@ import Asset, {
   CATEGORY_PREFIX_MAP,
   ALLOWED_CONDITIONS,
   ALLOWED_ASSET_STATUSES,
+  isValidCategoryDepartment,
 } from "../models/Asset.js";
 import MaintenanceRequest, { ALLOWED_DEPARTMENTS } from "../models/MaintenanceRequest.js";
 import { authenticateToken } from "../middleware/auth.js";
-import { getDepartmentForRole } from "./maintenanceRequests.js";
+import { getDepartmentForRole, isValidDateString } from "./maintenanceRequests.js";
 import { connectDB } from "../db.js";
 
 const router = Router();
 
 // Protect all asset routes with Firebase token & MongoDB active profile verification
 router.use(authenticateToken);
+
+/**
+ * Escape regular expression special characters to avoid ReDoS or invalid regex syntax
+ */
+export function escapeRegex(string) {
+  return String(string).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /**
  * Helper to determine user's assigned department from their verified MongoDB profile
@@ -29,7 +37,7 @@ export function getUserDepartment(user) {
 }
 
 /**
- * Safely generate the next sequential unique asset ID (e.g. TRK-101, SIG-201)
+ * Safely generate the next sequential unique asset ID (e.g. TRK-101, SIG-201) with bounded attempts
  */
 export async function generateUniqueAssetId(category) {
   const normCategory = CATEGORY_ALIASES[category] || category;
@@ -62,9 +70,12 @@ export async function generateUniqueAssetId(category) {
   let candidateNum = (nums.length ? Math.max(...nums) : startBase) + 1;
   let candidateId = `${prefix}-${candidateNum}`;
 
-  while (await Asset.exists({ $or: [{ assetId: candidateId }, { id: candidateId }] })) {
+  let attempts = 0;
+  const MAX_ATTEMPTS = 50;
+  while (attempts < MAX_ATTEMPTS && (await Asset.exists({ $or: [{ assetId: candidateId }, { id: candidateId }] }))) {
     candidateNum++;
     candidateId = `${prefix}-${candidateNum}`;
+    attempts++;
   }
 
   return candidateId;
@@ -154,6 +165,13 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // Validate category and department consistency
+    if (!isValidCategoryDepartment(normalizedCategory, finalDept)) {
+      return res.status(400).json({
+        error: `Category '${normalizedCategory}' is not compatible with department '${finalDept}'. Expected: '${expectedDept}'.`,
+      });
+    }
+
     // Role-based department check: non-admins can only create assets for their own department
     const userRole = String(req.user?.role || "").toLowerCase().trim();
     if (userRole === "passenger") {
@@ -177,17 +195,16 @@ router.post("/", async (req, res) => {
     }
 
     // 5. Handle Asset ID (custom or auto-generated)
-    let finalAssetId;
-    if (assetId && String(assetId).trim()) {
-      finalAssetId = String(assetId).trim().toUpperCase();
-      const existing = await findAsset(finalAssetId);
+    const isCustomAssetId = Boolean(assetId && String(assetId).trim());
+    let initialAssetId = isCustomAssetId ? String(assetId).trim().toUpperCase() : null;
+
+    if (isCustomAssetId) {
+      const existing = await findAsset(initialAssetId);
       if (existing) {
         return res.status(400).json({
-          error: `Asset identifier '${finalAssetId}' already exists.`,
+          error: `Asset identifier '${initialAssetId}' already exists.`,
         });
       }
-    } else {
-      finalAssetId = await generateUniqueAssetId(normalizedCategory);
     }
 
     // 6. Validate Condition if provided
@@ -232,39 +249,36 @@ router.post("/", async (req, res) => {
       finalAge = aNum;
     }
 
-    // Create record
-    const newAsset = new Asset({
-      assetId: finalAssetId,
-      id: finalAssetId,
-      name: String(name).trim(),
-      category: normalizedCategory,
-      assetType: String(assetType || "").trim(),
-      type: normalizedCategory,
-      location: String(location).trim(),
-      department: finalDept,
-      condition: finalCondition,
-      status: finalStatus,
-      risk: finalRisk,
-      age: finalAge,
-      installationDate: installationDate ? String(installationDate).trim() : null,
-      lastInspectionDate: lastInspectionDate ? String(lastInspectionDate).trim() : null,
-      nextInspectionDate: nextInspectionDate ? String(nextInspectionDate).trim() : null,
-      last: lastInspectionDate ? String(lastInspectionDate).trim() : null,
-      description: String(description || "").trim(),
-      isDeleted: false,
-      createdBy: {
-        uid: req.user?.firebaseUid || null,
-        email: req.user?.email || null,
-        role: req.user?.role || null,
-      },
-    });
+    // 10. Validate Dates strictly
+    if (installationDate !== undefined && installationDate !== null && String(installationDate).trim() !== "") {
+      if (!isValidDateString(installationDate)) {
+        return res.status(400).json({ error: "Invalid installationDate. Expected valid calendar date in YYYY-MM-DD format." });
+      }
+    }
+    if (lastInspectionDate !== undefined && lastInspectionDate !== null && String(lastInspectionDate).trim() !== "") {
+      if (!isValidDateString(lastInspectionDate)) {
+        return res.status(400).json({ error: "Invalid lastInspectionDate. Expected valid calendar date in YYYY-MM-DD format." });
+      }
+    }
+    if (nextInspectionDate !== undefined && nextInspectionDate !== null && String(nextInspectionDate).trim() !== "") {
+      if (!isValidDateString(nextInspectionDate)) {
+        return res.status(400).json({ error: "Invalid nextInspectionDate. Expected valid calendar date in YYYY-MM-DD format." });
+      }
+    }
 
-    let saved;
-    if (process.env.NODE_ENV === "test" && global.__TEST_ASSETS__) {
-      saved = {
-        _id: newAsset._id || new mongoose.Types.ObjectId().toString(),
-        assetId: finalAssetId,
-        id: finalAssetId,
+    // Bounded retry loop for concurrent unique ID generation and MongoDB duplicate-key handling
+    const MAX_RETRIES = 5;
+    let saved = null;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      const currentAssetId = isCustomAssetId
+        ? initialAssetId
+        : await generateUniqueAssetId(normalizedCategory);
+
+      const newAsset = new Asset({
+        assetId: currentAssetId,
+        id: currentAssetId,
         name: String(name).trim(),
         category: normalizedCategory,
         assetType: String(assetType || "").trim(),
@@ -286,18 +300,75 @@ router.post("/", async (req, res) => {
           email: req.user?.email || null,
           role: req.user?.role || null,
         },
-        saveCallCount: 1,
-        async save() {
-          this.saveCallCount++;
-          if (global.__TEST_ASSETS__) {
-            global.__TEST_ASSETS__[this.assetId] = this;
+      });
+
+      try {
+        if (process.env.NODE_ENV === "test" && global.__TEST_ASSETS__) {
+          if (global.__TEST_FORCE_ASSET_COLLISION__ && attempt === 1) {
+            global.__TEST_FORCE_ASSET_COLLISION__ = false;
+            const dupErr = new Error("E11000 duplicate key error collection");
+            dupErr.code = 11000;
+            throw dupErr;
           }
-          return { ...this };
-        },
-      };
-      global.__TEST_ASSETS__[finalAssetId] = saved;
-    } else {
-      saved = await newAsset.save();
+          saved = {
+            _id: newAsset._id || new mongoose.Types.ObjectId().toString(),
+            assetId: currentAssetId,
+            id: currentAssetId,
+            name: String(name).trim(),
+            category: normalizedCategory,
+            assetType: String(assetType || "").trim(),
+            type: normalizedCategory,
+            location: String(location).trim(),
+            department: finalDept,
+            condition: finalCondition,
+            status: finalStatus,
+            risk: finalRisk,
+            age: finalAge,
+            installationDate: installationDate ? String(installationDate).trim() : null,
+            lastInspectionDate: lastInspectionDate ? String(lastInspectionDate).trim() : null,
+            nextInspectionDate: nextInspectionDate ? String(nextInspectionDate).trim() : null,
+            last: lastInspectionDate ? String(lastInspectionDate).trim() : null,
+            description: String(description || "").trim(),
+            isDeleted: false,
+            createdBy: {
+              uid: req.user?.firebaseUid || null,
+              email: req.user?.email || null,
+              role: req.user?.role || null,
+            },
+            saveCallCount: 1,
+            async save() {
+              this.saveCallCount++;
+              if (global.__TEST_ASSETS__) {
+                global.__TEST_ASSETS__[this.assetId] = this;
+              }
+              return { ...this };
+            },
+          };
+          global.__TEST_ASSETS__[currentAssetId] = saved;
+          break;
+        } else {
+          saved = await newAsset.save();
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+        if (err?.code === 11000) {
+          if (isCustomAssetId) {
+            return res.status(400).json({
+              error: `Asset identifier '${currentAssetId}' already exists.`,
+            });
+          }
+          if (attempt < MAX_RETRIES) {
+            continue;
+          }
+        }
+        throw err;
+      }
+    }
+
+    if (!saved) {
+      console.error("Exhausted retries generating unique asset ID:", lastError?.message);
+      return res.status(500).json({ error: "Failed to create asset after retries." });
     }
 
     return res.status(201).json({
@@ -353,13 +424,14 @@ router.get("/", async (req, res) => {
 
     // Location filter
     if (req.query.location) {
-      query.location = new RegExp(String(req.query.location).trim(), "i");
+      const safeLoc = escapeRegex(String(req.query.location).trim());
+      query.location = new RegExp(safeLoc, "i");
     }
 
     // Search query by asset ID or name
     const search = req.query.search || req.query.q;
     if (search && String(search).trim()) {
-      const cleanSearch = String(search).trim();
+      const cleanSearch = escapeRegex(String(search).trim());
       query.$or = [
         { assetId: new RegExp(cleanSearch, "i") },
         { name: new RegExp(cleanSearch, "i") },
@@ -374,8 +446,12 @@ router.get("/", async (req, res) => {
         if (query.department && a.department !== query.department) return false;
         if (query.condition && a.condition !== query.condition) return false;
         if (query.status && a.status !== query.status) return false;
+        if (req.query.location) {
+          const locQuery = String(req.query.location).trim().toLowerCase();
+          if (!String(a.location || "").toLowerCase().includes(locQuery)) return false;
+        }
         if (search) {
-          const s = String(search).toLowerCase();
+          const s = String(search).trim().toLowerCase();
           const matchId = String(a.assetId || "").toLowerCase().includes(s);
           const matchName = String(a.name || "").toLowerCase().includes(s);
           if (!matchId && !matchName) return false;
@@ -494,7 +570,14 @@ router.patch("/:id", async (req, res) => {
       asset.name = String(name).trim();
     }
 
+    // Validate Category and Department consistency (including partial updates)
+    let candidateCategory = asset.category;
+    let candidateDept = asset.department;
+
     if (category !== undefined) {
+      if (!category || !String(category).trim()) {
+        return res.status(400).json({ error: "Category cannot be empty." });
+      }
       const rawCat = String(category).trim();
       const normCat = CATEGORY_ALIASES[rawCat] || rawCat;
       if (!ALLOWED_CATEGORIES.includes(normCat)) {
@@ -502,23 +585,11 @@ router.patch("/:id", async (req, res) => {
           error: `Category is invalid. Allowed: ${ALLOWED_CATEGORIES.join(", ")}`,
         });
       }
-      asset.category = normCat;
-      asset.type = normCat;
-    }
-
-    if (assetType !== undefined) {
-      asset.assetType = String(assetType).trim();
-    }
-
-    if (location !== undefined) {
-      if (!String(location).trim()) {
-        return res.status(400).json({ error: "Location cannot be empty." });
-      }
-      asset.location = String(location).trim();
+      candidateCategory = normCat;
     }
 
     if (department !== undefined) {
-      if (!ALLOWED_DEPARTMENTS.includes(department)) {
+      if (!department || !ALLOWED_DEPARTMENTS.includes(department)) {
         return res.status(400).json({
           error: `Department is invalid. Allowed: ${ALLOWED_DEPARTMENTS.join(", ")}`,
         });
@@ -531,7 +602,30 @@ router.patch("/:id", async (req, res) => {
           });
         }
       }
-      asset.department = department;
+      candidateDept = department;
+    }
+
+    if (category !== undefined || department !== undefined) {
+      if (!isValidCategoryDepartment(candidateCategory, candidateDept)) {
+        const expectedDept = CATEGORY_DEPARTMENT_MAP[candidateCategory];
+        return res.status(400).json({
+          error: `Category '${candidateCategory}' is not compatible with department '${candidateDept}'. Expected: '${expectedDept}'.`,
+        });
+      }
+      asset.category = candidateCategory;
+      asset.type = candidateCategory;
+      asset.department = candidateDept;
+    }
+
+    if (assetType !== undefined) {
+      asset.assetType = String(assetType).trim();
+    }
+
+    if (location !== undefined) {
+      if (!String(location).trim()) {
+        return res.status(400).json({ error: "Location cannot be empty." });
+      }
+      asset.location = String(location).trim();
     }
 
     if (condition !== undefined) {
@@ -568,18 +662,41 @@ router.patch("/:id", async (req, res) => {
       asset.age = aNum;
     }
 
+    // Validate Dates strictly
     if (installationDate !== undefined) {
-      asset.installationDate = installationDate ? String(installationDate).trim() : null;
+      if (installationDate !== null && String(installationDate).trim() !== "") {
+        if (!isValidDateString(installationDate)) {
+          return res.status(400).json({ error: "Invalid installationDate. Expected valid calendar date in YYYY-MM-DD format." });
+        }
+        asset.installationDate = String(installationDate).trim();
+      } else {
+        asset.installationDate = null;
+      }
     }
 
     if (lastInspectionDate !== undefined) {
-      const trimmedDate = lastInspectionDate ? String(lastInspectionDate).trim() : null;
-      asset.lastInspectionDate = trimmedDate;
-      asset.last = trimmedDate;
+      if (lastInspectionDate !== null && String(lastInspectionDate).trim() !== "") {
+        if (!isValidDateString(lastInspectionDate)) {
+          return res.status(400).json({ error: "Invalid lastInspectionDate. Expected valid calendar date in YYYY-MM-DD format." });
+        }
+        const trimmedDate = String(lastInspectionDate).trim();
+        asset.lastInspectionDate = trimmedDate;
+        asset.last = trimmedDate;
+      } else {
+        asset.lastInspectionDate = null;
+        asset.last = null;
+      }
     }
 
     if (nextInspectionDate !== undefined) {
-      asset.nextInspectionDate = nextInspectionDate ? String(nextInspectionDate).trim() : null;
+      if (nextInspectionDate !== null && String(nextInspectionDate).trim() !== "") {
+        if (!isValidDateString(nextInspectionDate)) {
+          return res.status(400).json({ error: "Invalid nextInspectionDate. Expected valid calendar date in YYYY-MM-DD format." });
+        }
+        asset.nextInspectionDate = String(nextInspectionDate).trim();
+      } else {
+        asset.nextInspectionDate = null;
+      }
     }
 
     if (description !== undefined) {

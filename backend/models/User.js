@@ -1,6 +1,15 @@
 import mongoose from "mongoose";
 
-export const ROLES = ["admin", "engineering", "traction", "signal", "passenger"];
+export const ROLES = [
+  "admin",
+  "engineering",
+  "traction",
+  "electrical",
+  "signal",
+  "mechanical",
+  "bridges",
+  "passenger",
+];
 export const STATUSES = ["active", "inactive"];
 
 const userSchema = new mongoose.Schema(
@@ -22,7 +31,7 @@ const userSchema = new mongoose.Schema(
       required: [true, "role is required"],
       enum: {
         values: ROLES,
-        message: "{VALUE} is not a valid role. Allowed roles: admin, engineering, traction, signal, passenger",
+        message: "{VALUE} is not a valid role. Allowed roles: admin, engineering, traction, electrical, signal, mechanical, bridges, passenger",
       },
     },
     department: {
