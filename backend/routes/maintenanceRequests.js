@@ -8,6 +8,7 @@ import MaintenanceRequest, {
 import { authenticateToken } from "../middleware/auth.js";
 import { connectDB } from "../db.js";
 import { findAsset } from "./assets.js";
+import { createNotification } from "../services/notificationService.js";
 
 const router = Router();
 
@@ -344,6 +345,18 @@ router.post("/", async (req, res) => {
       return res.status(500).json({ error: "Failed to generate unique maintenance request ID after retries." });
     }
 
+    try {
+      await createNotification({
+        kind: "request-created",
+        title: `New Maintenance Request: ${saved.id}`,
+        desc: `${saved.type} for asset ${saved.asset} (${saved.pri} priority).`,
+        department: saved.dept,
+        ref: { id: saved.id, t: "request" },
+      });
+    } catch (notifErr) {
+      console.warn("Could not create notification for new request:", notifErr.message);
+    }
+
     return res.status(201).json({
       message: "Maintenance request created successfully.",
       request: saved,
@@ -580,6 +593,28 @@ router.patch("/:id/status", async (req, res) => {
 
     // 8. Persist to MongoDB Atlas
     const updated = await reqDoc.save();
+
+    try {
+      if (status === "Completed") {
+        await createNotification({
+          kind: "completed",
+          title: `Maintenance Completed: ${reqDoc.id}`,
+          desc: `${reqDoc.type} for asset ${reqDoc.asset} marked as Completed.`,
+          department: reqDoc.dept,
+          ref: { id: reqDoc.id, t: "request" },
+        });
+      } else if (start !== undefined && start !== null) {
+        await createNotification({
+          kind: "schedule-change",
+          title: `Schedule Updated: ${reqDoc.id}`,
+          desc: `Scheduled window set to ${reqDoc.start} for ${reqDoc.asset}.`,
+          department: reqDoc.dept,
+          ref: { id: reqDoc.id, t: "request" },
+        });
+      }
+    } catch (notifErr) {
+      console.warn("Could not create notification for status update:", notifErr.message);
+    }
 
     return res.json({
       message: "Status updated successfully.",

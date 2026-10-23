@@ -70,7 +70,7 @@ export function getMonthLabel(monthKey) {
  * Helper to fetch maintenance requests based on filters (handles test mock & real MongoDB)
  */
 async function fetchMaintenanceRequests(filter = {}) {
-  if (process.env.NODE_ENV === "test") {
+  if (process.env.NODE_ENV === "test" && process.env.IS_INTEGRATION_TEST !== "true") {
     const all = Object.values(global.__TEST_DOCS__ || {});
     return all.filter((r) => {
       if (filter.dept && r.dept !== filter.dept) return false;
@@ -97,7 +97,7 @@ async function fetchMaintenanceRequests(filter = {}) {
  * Helper to fetch assets based on filters (handles test mock & real MongoDB)
  */
 async function fetchAssets(filter = {}) {
-  if (process.env.NODE_ENV === "test") {
+  if (process.env.NODE_ENV === "test" && process.env.IS_INTEGRATION_TEST !== "true") {
     const all = Object.values(global.__TEST_ASSETS__ || {});
     return all.filter((a) => {
       if (filter.excludeDeleted && a.isDeleted) return false;

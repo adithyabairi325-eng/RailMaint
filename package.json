@@ -9,6 +9,7 @@
     "dev:backend": "node --watch backend/index.js",
     "setup:admin": "node backend/scripts/setupAdmin.js",
     "test": "node --test backend/tests/*.test.js",
+    "test:integration": "node --test backend/tests/reports.integration.test.js",
     "lint": "oxlint",
     "preview": "vite preview frontend"
   },

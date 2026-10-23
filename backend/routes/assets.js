@@ -13,6 +13,7 @@ import MaintenanceRequest, { ALLOWED_DEPARTMENTS } from "../models/MaintenanceRe
 import { authenticateToken } from "../middleware/auth.js";
 import { getDepartmentForRole, isValidDateString } from "./maintenanceRequests.js";
 import { connectDB } from "../db.js";
+import { createNotification } from "../services/notificationService.js";
 
 const router = Router();
 
@@ -371,6 +372,20 @@ router.post("/", async (req, res) => {
       return res.status(500).json({ error: "Failed to create asset after retries." });
     }
 
+    try {
+      if ((saved.risk && saved.risk >= 80) || saved.condition === "Critical") {
+        await createNotification({
+          kind: "critical-risk",
+          title: `Critical Asset Risk: ${saved.assetId}`,
+          desc: `${saved.name} risk reached ${saved.risk}% (${saved.condition}). Urgent maintenance required.`,
+          department: saved.department,
+          ref: { id: saved.assetId, t: "asset" },
+        });
+      }
+    } catch (notifErr) {
+      console.warn("Could not create notification for critical asset:", notifErr.message);
+    }
+
     return res.status(201).json({
       message: "Asset created successfully.",
       asset: saved,
@@ -704,6 +719,20 @@ router.patch("/:id", async (req, res) => {
     }
 
     const updated = await asset.save();
+
+    try {
+      if ((updated.risk && updated.risk >= 80) || updated.condition === "Critical") {
+        await createNotification({
+          kind: "critical-risk",
+          title: `Critical Asset Risk: ${updated.assetId || updated.id}`,
+          desc: `${updated.name} risk reached ${updated.risk}% (${updated.condition}). Urgent maintenance required.`,
+          department: updated.department,
+          ref: { id: updated.assetId || updated.id, t: "asset" },
+        });
+      }
+    } catch (notifErr) {
+      console.warn("Could not create notification for critical asset update:", notifErr.message);
+    }
 
     return res.json({
       message: "Asset updated successfully.",

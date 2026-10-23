@@ -323,6 +323,31 @@ export default function AdminDashboard({ onLogout, user }) {
           console.warn('Asset sync notice:', e.message);
         }
       })();
+
+      // Sync notifications from MongoDB Atlas via Express backend
+      async function syncNotifications() {
+        try {
+          const token = await auth?.currentUser?.getIdToken();
+          if (!token) return;
+          const res = await fetch('/api/notifications', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data?.notifications)) {
+              S.notifs = data.notifications;
+              persist();
+              updateBell();
+              if (currentRoute === 'notifications') {
+                render(true);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Notifications sync notice:', e.message);
+        }
+      }
+      syncNotifications();
     }
 
     function reportRows() {
@@ -382,8 +407,14 @@ export default function AdminDashboard({ onLogout, user }) {
     function updateBell() {
       const n = S.notifs.filter((x) => !x.read).length;
       const b = $('#bell');
-      b.setAttribute('aria-label', `Notifications, ${n} unread`);
-      b.innerHTML = ic('bell') + (n ? `<span class="badge">${n}</span>` : '');
+      if (b) {
+        b.setAttribute('aria-label', `Notifications, ${n} unread`);
+        b.innerHTML = ic('bell') + (n ? `<span class="badge">${n}</span>` : '');
+      }
+      const navNf = root.querySelector('#nav a[data-k="notifications"] .lbl');
+      if (navNf) {
+        navNf.innerHTML = `Notifications${n ? ` <span style="display:inline-block;padding:1px 6px;font-size:11px;font-weight:800;border-radius:10px;background:var(--orange);color:#fff;margin-left:6px">${n}</span>` : ''}`;
+      }
     }
     function sevIcon(kind) {
       const m = { 'critical-risk': ['alert', 'crit'], predicted: ['trend', 'high'], overdue: ['clock', 'high'], conflict: ['alert', 'med'], delayed: ['clock', 'med'], completed: ['check', 'low'] }[kind];
@@ -1983,26 +2014,53 @@ export default function AdminDashboard({ onLogout, user }) {
 
     mounts.notifications = () => {
       V.querySelectorAll('[data-nf]').forEach((b) => (b.onclick = () => { S.ui.nf = b.dataset.nf; render(true); }));
-      $('#nf-all').onclick = () => {
-        S.notifs.forEach((n) => (n.read = true));
-        persist();
-        updateBell();
-        render(true);
-      };
-      V.querySelectorAll('.nf').forEach((li) => (li.onclick = (e) => {
-        const n = S.notifs.find((x) => x.id === li.dataset.n);
-        if (!n) return;
-        if (e.target.closest('[data-mark]')) {
-          n.read = true;
+      const markAllBtn = $('#nf-all');
+      if (markAllBtn) {
+        markAllBtn.onclick = async () => {
+          S.notifs.forEach((n) => (n.read = true));
           persist();
           updateBell();
           render(true);
+          try {
+            const token = await auth?.currentUser?.getIdToken();
+            if (token) {
+              await fetch('/api/notifications/mark-all-read', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` },
+              });
+            }
+          } catch (e) {
+            console.warn('Mark all read notice:', e.message);
+          }
+        };
+      }
+      V.querySelectorAll('.nf').forEach((li) => (li.onclick = async (e) => {
+        const n = S.notifs.find((x) => x.id === li.dataset.n);
+        if (!n) return;
+        const markOnly = e.target.closest('[data-mark]');
+        if (!n.read) {
+          n.read = true;
+          persist();
+          updateBell();
+          try {
+            const token = await auth?.currentUser?.getIdToken();
+            if (token) {
+              await fetch(`/api/notifications/${n.id}/read`, {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${token}` },
+              });
+            }
+          } catch (err) {
+            console.warn('Mark read notice:', err.message);
+          }
+        }
+        if (markOnly) {
+          render(true);
           return;
         }
-        n.read = true;
-        persist();
-        updateBell();
-        openRef(n.ref);
+        if (n.ref) {
+          openRef(n.ref);
+        }
         render(true);
       }));
     };
