@@ -83,6 +83,13 @@ import {
   reqById as reqByIdStore,
   reportRows as reportRowsStore,
 } from './lib/store';
+import {
+  fetchReportsData as fetchReportsDataApi,
+  isFetchingReports,
+  syncMaintenanceRequests,
+  syncAssets,
+  syncNotifications as syncNotificationsApi,
+} from './lib/api';
 
 export default function AdminDashboard({ onLogout, user }) {
   const containerRef = useRef(null);
@@ -108,80 +115,9 @@ export default function AdminDashboard({ onLogout, user }) {
 
     function seed() {
       seedStore(S, persist);
-
-      // Sync maintenance requests from MongoDB Atlas via Express backend
-      (async () => {
-        try {
-          const token = await auth?.currentUser?.getIdToken();
-          if (!token) return;
-          const res = await fetch('/api/maintenance-requests', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data?.requests)) {
-              // MongoDB is the sole source of truth for persisted requests
-              S.requests = data.requests;
-              persist();
-              render(true);
-            }
-          }
-        } catch (e) {
-          console.warn('MongoDB sync notice:', e.message);
-        }
-      })();
-
-      // Sync assets from MongoDB Atlas via Express backend
-      (async () => {
-        try {
-          const token = await auth?.currentUser?.getIdToken();
-          if (!token) return;
-          const res = await fetch('/api/assets?limit=100', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data?.assets) && data.assets.length > 0) {
-              S.assets = data.assets.map((a) => ({
-                ...a,
-                id: a.id || a.assetId || a._id,
-                assetId: a.assetId || a.id || a._id,
-                type: a.type || a.category || a.assetType || 'Track',
-                last: a.last || a.lastInspectionDate || TODAY,
-              }));
-              persist();
-              render(true);
-            }
-          }
-        } catch (e) {
-          console.warn('Asset sync notice:', e.message);
-        }
-      })();
-
-      // Sync notifications from MongoDB Atlas via Express backend
-      async function syncNotifications() {
-        try {
-          const token = await auth?.currentUser?.getIdToken();
-          if (!token) return;
-          const res = await fetch('/api/notifications', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data?.notifications)) {
-              S.notifs = data.notifications;
-              persist();
-              updateBell();
-              if (currentRoute === 'notifications') {
-                render(true);
-              }
-            }
-          }
-        } catch (e) {
-          console.warn('Notifications sync notice:', e.message);
-        }
-      }
-      syncNotifications();
+      syncMaintenanceRequests({ auth, state: S, persist, render });
+      syncAssets({ auth, state: S, persist, render, constants: { TODAY } });
+      syncNotificationsApi({ auth, state: S, persist, render, helpers: { updateBell, getCurrentRoute: () => currentRoute } });
     }
 
     /* ---------- UI helpers ---------- */
@@ -1500,48 +1436,7 @@ export default function AdminDashboard({ onLogout, user }) {
       return o;
     };
     /* reports */
-    let isFetchingReports = false;
-    async function fetchReportsData() {
-      if (isFetchingReports) return;
-      isFetchingReports = true;
-      try {
-        const token = await auth?.currentUser?.getIdToken();
-        if (!token) {
-          isFetchingReports = false;
-          return;
-        }
-
-        const { from, to, dept } = S.ui.rp;
-        const qParams = new URLSearchParams();
-        if (from) qParams.set('from', from);
-        if (to) qParams.set('to', to);
-        if (dept) qParams.set('department', dept);
-
-        const qs = qParams.toString() ? `?${qParams.toString()}` : '';
-        const deptQs = dept ? `?department=${encodeURIComponent(dept)}` : '';
-        const headers = { Authorization: `Bearer ${token}` };
-
-        const [ovRes, dpRes, trRes, asRes] = await Promise.all([
-          fetch(`/api/reports/overview${qs}`, { headers }).then((r) => r.ok ? r.json() : null).catch(() => null),
-          fetch(`/api/reports/departments${qs}`, { headers }).then((r) => r.ok ? r.json() : null).catch(() => null),
-          fetch(`/api/reports/trends${qs}`, { headers }).then((r) => r.ok ? r.json() : null).catch(() => null),
-          fetch(`/api/reports/assets${deptQs}`, { headers }).then((r) => r.ok ? r.json() : null).catch(() => null),
-        ]);
-
-        S.rpData = {
-          overview: ovRes,
-          departments: dpRes,
-          trends: trRes,
-          assets: asRes,
-          loaded: true,
-        };
-      } catch (err) {
-        console.warn('Reports fetch error:', err.message);
-      } finally {
-        isFetchingReports = false;
-        render(true);
-      }
-    }
+    const fetchReportsData = () => fetchReportsDataApi({ auth, state: S, render });
 
     function repRows() {
       const { from, to, dept } = S.ui.rp;
