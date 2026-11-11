@@ -1,6 +1,22 @@
 import React, { useEffect, useRef } from 'react';
 import './AdminDashboard.css';
 import { auth } from '../../firebase/firebaseConfig';
+import {
+  getToday,
+  TODAY,
+  DEPTS,
+  CATS,
+  CAT_DEPT,
+  SHORT,
+  PREFIX,
+  WORK,
+  PRI,
+  RANK,
+  MON,
+  DEPT_TAG_CLASS,
+  STORAGE_KEY,
+  NAV,
+} from './lib/constants';
 
 export default function AdminDashboard({ onLogout, user }) {
   const containerRef = useRef(null);
@@ -10,35 +26,6 @@ export default function AdminDashboard({ onLogout, user }) {
     if (!root) return;
 
     /* ---------- constants ---------- */
-    const getToday = () => {
-      const d = new Date();
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    };
-    const TODAY = getToday();
-    const DEPTS = ['Engineering / Track', 'Signal & Telecom', 'Electrical / Traction', 'Mechanical', 'Bridges'];
-    const CATS = ['Track', 'Signals & Communication', 'Electrical & Power', 'Mechanical', 'Bridges'];
-    const CAT_DEPT = Object.fromEntries(CATS.map((c, i) => [c, DEPTS[i]]));
-    const SHORT = {
-      'Engineering / Track': 'Track',
-      'Signal & Telecom': 'Signal',
-      'Electrical / Traction': 'Electrical',
-      'Mechanical': 'Mechanical',
-      'Bridges': 'Bridges',
-    };
-    const PREFIX = { 'Track': 'TRK', 'Signals & Communication': 'SIG', 'Electrical & Power': 'ELE', 'Mechanical': 'MEC', 'Bridges': 'BRG' };
-    const WORK = {
-      [DEPTS[0]]: ['Rail replacement', 'Sleeper replacement', 'Fastener tightening', 'Track section repair', 'Track switch repair'],
-      [DEPTS[1]]: ['Signal repair', 'Network / communication fault', 'Equipment damage repair'],
-      [DEPTS[2]]: ['Transformer service', 'Power supply fix', 'Overheating inspection'],
-      [DEPTS[3]]: ['Wheel repair', 'Brake repair', 'Motor part replacement', 'Component replacement'],
-      [DEPTS[4]]: ['Structure repair', 'Concrete support repair', 'Bridge deck repair', 'Bearing replacement'],
-    };
-    const PRI = ['Critical', 'High', 'Medium', 'Low'];
-    const RANK = { Critical: 4, High: 3, Medium: 2, Low: 1 };
-    const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
     /* ---------- helpers ---------- */
     const $ = (s, r = root) => r.querySelector(s);
@@ -90,13 +77,7 @@ export default function AdminDashboard({ onLogout, user }) {
       if (!m) return `${h} hr${h > 1 ? 's' : ''}`;
       return `${h} hr${h > 1 ? 's' : ''} ${m} min`;
     };
-    const DEPT_TAG_CLASS = {
-      'Engineering / Track': 'dept-track',
-      'Signal & Telecom': 'dept-signal',
-      'Electrical / Traction': 'dept-electrical',
-      'Mechanical': 'dept-mechanical',
-      'Bridges': 'dept-bridges',
-    };
+
     const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 864e5);
     const addDays = (iso, n) => {
       const d = new Date(iso + 'T00:00:00Z');
@@ -194,7 +175,6 @@ export default function AdminDashboard({ onLogout, user }) {
     }
 
     /* ---------- persistent JS data store (NO Location, Clean User Data) ---------- */
-    const STORAGE_KEY = 'railmaint_user_store_v3';
     const S = {
       assets: [],
       requests: [],
@@ -2066,17 +2046,6 @@ export default function AdminDashboard({ onLogout, user }) {
     };
 
     /* ---------- shell ---------- */
-    const NAV = [
-      ['dashboard', 'Dashboard Overview', 'grid'],
-      ['requests', 'Maintenance Requests', 'clipboard'],
-      ['blocks', 'Block Optimization', 'calendar'],
-      ['assets', 'Asset Management', 'box'],
-      ['risk', 'Present Risk Scoring', 'gauge'],
-      ['prediction', 'Future Failure Prediction', 'trend'],
-      ['whatif', 'What-If Simulator', 'sliders'],
-      ['reports', 'Reports & Analytics', 'bars'],
-      ['notifications', 'Notifications', 'bell'],
-    ];
 
     const appEl = $('#app');
     $('#logo').textContent = 'R';
