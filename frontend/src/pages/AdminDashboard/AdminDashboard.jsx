@@ -1,96 +1,23 @@
 import React, { useEffect, useRef } from 'react';
 import './AdminDashboard.css';
 import { auth } from '../../firebase/firebaseConfig';
-import {
-  getToday,
-  TODAY,
-  DEPTS,
-  CATS,
-  CAT_DEPT,
-  SHORT,
-  PREFIX,
-  WORK,
-  PRI,
-  RANK,
-  MON,
-  DEPT_TAG_CLASS,
-  STORAGE_KEY,
-  NAV,
-} from './lib/constants';
-import {
-  fmtD,
-  dm,
-  tm,
-  mt,
-  to12,
-  mt12,
-  timeRange12,
-  fmtDur,
-  addDays,
-  daysBetween,
-  hash,
-  clamp,
-  esc,
-} from './lib/format';
+import * as constants from './lib/constants';
 import {
   initDom,
-  $,
-  ic,
-  dl,
-  opts,
-  fld,
-  kpi,
-  stat,
   toast,
-  openPanel,
   openModal,
+  openPanel,
   closeLayers,
 } from './lib/dom';
+import { initCharts } from './lib/charts';
 import {
-  riskClass,
-  cond,
-  TONE,
-  pill,
-  GCOL,
-  daysSince,
-  prob,
-  compat,
-  sched,
-  endOf,
-  overlap,
-  isDelayedTask,
-  getRequestStatus,
-  conflictPairs,
-  blocksOf,
-  assess,
-  series,
-  whatIfCalc as domainWhatIfCalc,
-} from './lib/domain';
-import {
-  initCharts,
-  gauge,
-  animGauge,
-  factorsHTML,
-  lineChart,
-  barChart,
-} from './lib/charts';
-import {
-  DEFAULT_ASSETS,
   createInitialState,
   persist as persistStore,
-  seed as seedStore,
   assetById as assetByIdStore,
   reqById as reqByIdStore,
   reportRows as reportRowsStore,
 } from './lib/store';
-import {
-  fetchReportsData as fetchReportsDataApi,
-  isFetchingReports,
-  syncMaintenanceRequests,
-  syncAssets,
-  syncNotifications as syncNotificationsApi,
-} from './lib/api';
-import { pageModules } from './pages';
+import { optimize as optimizeBlocks } from './pages/blocks';
 import { createModals } from './modals';
 import { createShell } from './shell';
 
@@ -103,86 +30,8 @@ export default function AdminDashboard({ onLogout, user }) {
     initDom(root);
     initCharts(root);
 
-    /* ---------- constants ---------- */
-
-    /* ---------- helpers ---------- */
-
-    /* ---------- domain rules (Single Location) ---------- */
-
-    /* ---------- persistent JS data store (NO Location, Clean User Data) ---------- */
     const S = createInitialState();
     const persist = () => persistStore(S);
-    const assetById = (id) => assetByIdStore(S, id);
-    const reqById = (id) => reqByIdStore(S, id);
-    const reportRows = () => reportRowsStore(S);
-
-    function seed() {
-      seedStore(S, persist);
-      syncMaintenanceRequests({ auth, state: S, persist, render: (p) => ctx.render(p) });
-      syncAssets({ auth, state: S, persist, render: (p) => ctx.render(p), constants: { TODAY } });
-      syncNotificationsApi({ auth, state: S, persist, render: (p) => ctx.render(p), helpers: { updateBell, getCurrentRoute: () => ctx.helpers?.getCurrentRoute?.() || 'dashboard' } });
-    }
-
-    /* ---------- UI helpers ---------- */
-    const V = $('#view');
-
-    function addNotif(kind, title, desc, ref) {
-      S.notifs.unshift({ id: 'N' + Date.now() + Math.random().toString(36).slice(2, 5), kind, title, desc, time: 'Just now', ref, read: false });
-      persist();
-      updateBell();
-    }
-    function updateBell() {
-      const n = S.notifs.filter((x) => !x.read).length;
-      const b = $('#bell');
-      if (b) {
-        b.setAttribute('aria-label', `Notifications, ${n} unread`);
-        b.innerHTML = ic('bell') + (n ? `<span class="badge">${n}</span>` : '');
-      }
-      const navNf = root.querySelector('#nav a[data-k="notifications"] .lbl');
-      if (navNf) {
-        navNf.innerHTML = `Notifications${n ? ` <span style="display:inline-block;padding:1px 6px;font-size:11px;font-weight:800;border-radius:10px;background:var(--orange);color:#fff;margin-left:6px">${n}</span>` : ''}`;
-      }
-    }
-    function sevIcon(kind) {
-      const m = { 'critical-risk': ['alert', 'crit'], predicted: ['trend', 'high'], overdue: ['clock', 'high'], conflict: ['alert', 'med'], delayed: ['clock', 'med'], completed: ['check', 'low'] }[kind];
-      return `<span class="sev ${m[1]}">${ic(m[0], 18)}</span>`;
-    }
-    function openRef(ref) {
-      ref.t === 'request' ? ctx.modals.openRequest(ref.id) : ctx.modals.openAsset(ref.id);
-    }
-
-    /* block optimization */
-    function optimize() {
-      const before = conflictPairs(S.requests).length;
-      let changed = 0;
-      const groups = {};
-      S.requests.filter((r) => r.status !== 'Completed').forEach((r) => {
-        if (r.status === 'Delayed' && r.date < TODAY) r.date = TODAY;
-        (groups[r.date] ??= []).push(r);
-      });
-      Object.values(groups).forEach((g) => {
-        const placed = g.filter((r) => r.status === 'In Progress');
-        g.filter((r) => r.status !== 'In Progress')
-          .sort((a, b) => RANK[b.pri] - RANK[a.pri] || b.dur - a.dur)
-          .forEach((r) => {
-            const cand = [...new Set([540, ...placed.map(endOf)])].sort((a, b) => a - b);
-            const ok = (s) => placed.every((p) => compat(p.dept, r.dept) || !(s < endOf(p) && tm(p.start) < s + r.dur));
-            const s = cand.find(ok) ?? Math.max(...placed.map(endOf), 540);
-            const ns = mt(s);
-            if (r.start !== ns || r.status !== 'Scheduled') changed++;
-            r.start = ns;
-            r.status = 'Scheduled';
-            placed.push(r);
-          });
-      });
-      const after = conflictPairs(S.requests).length;
-      const shared = blocksOf(S.requests).filter((b) => {
-        const d = new Set(b.tasks.map((t) => t.dept));
-        return d.size > 1 && b.tasks.some((t, i) => b.tasks.some((u, j) => i < j && overlap(t, u)));
-      }).length;
-      persist();
-      toast(`Optimized: ${changed} tasks scheduled, ${shared} shared blocks, ${before - after} conflicts resolved.`);
-    }
 
     const ctx = {
       root,
@@ -195,37 +44,18 @@ export default function AdminDashboard({ onLogout, user }) {
       closeLayers,
       auth,
       onLogout,
-      constants: {
-        TODAY,
-        DEPTS,
-        CATS,
-        CAT_DEPT,
-        SHORT,
-        PREFIX,
-        WORK,
-        PRI,
-        RANK,
-        MON,
-        DEPT_TAG_CLASS,
-        STORAGE_KEY,
-        NAV,
-      },
+      constants,
       helpers: {
-        assetById,
-        reqById,
-        reportRows,
-        updateBell,
-        openRef,
-        optimize,
-        addNotif,
-        seed,
+        assetById: (id) => assetByIdStore(S, id),
+        reqById: (id) => reqByIdStore(S, id),
+        reportRows: () => reportRowsStore(S),
+        optimize: () => optimizeBlocks(ctx),
       },
       modals: {},
     };
 
-    const modals = createModals(ctx);
-    ctx.modals = modals;
-    Object.assign(ctx.helpers, modals);
+    ctx.modals = createModals(ctx);
+    Object.assign(ctx.helpers, ctx.modals);
 
     return createShell(ctx);
   }, [onLogout]);

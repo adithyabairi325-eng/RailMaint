@@ -1,10 +1,17 @@
-import { NAV } from './lib/constants';
+import { NAV, TODAY } from './lib/constants';
 import { ic } from './lib/dom';
 import { pageModules } from './pages';
+import { seed as seedStore } from './lib/store';
+import {
+  syncMaintenanceRequests,
+  syncAssets,
+  syncNotifications as syncNotificationsApi,
+} from './lib/api';
 
 export function createShell(ctx) {
   const {
     root,
+    state: S,
     closeLayers,
     helpers,
     modals,
@@ -21,6 +28,35 @@ export function createShell(ctx) {
     deleteRequest,
     deleteAsset,
   } = modals || helpers;
+
+  function updateBell() {
+    const n = S.notifs.filter((x) => !x.read).length;
+    const b = $('#bell');
+    if (b) {
+      b.setAttribute('aria-label', `Notifications, ${n} unread`);
+      b.innerHTML = ic('bell') + (n ? `<span class="badge">${n}</span>` : '');
+    }
+    const navNf = root.querySelector('#nav a[data-k="notifications"] .lbl');
+    if (navNf) {
+      navNf.innerHTML = `Notifications${n ? ` <span style="display:inline-block;padding:1px 6px;font-size:11px;font-weight:800;border-radius:10px;background:var(--orange);color:#fff;margin-left:6px">${n}</span>` : ''}`;
+    }
+  }
+
+  function addNotif(kind, title, desc, ref) {
+    S.notifs.unshift({ id: 'N' + Date.now() + Math.random().toString(36).slice(2, 5), kind, title, desc, time: 'Just now', ref, read: false });
+    ctx.persist();
+    updateBell();
+  }
+
+  function openRef(ref) {
+    ref.t === 'request' ? (modals?.openRequest || openRequest)(ref.id) : (modals?.openAsset || openAsset)(ref.id);
+  }
+
+  if (helpers) {
+    helpers.updateBell = updateBell;
+    helpers.addNotif = addNotif;
+    helpers.openRef = openRef;
+  }
 
   const pages = {};
   const mounts = {};
@@ -55,7 +91,7 @@ export function createShell(ctx) {
     });
     V.innerHTML = pages[k]();
     mounts[k]?.();
-    if (helpers?.updateBell) helpers.updateBell();
+    updateBell();
     if (keepScroll !== true) {
       window.scrollTo(0, 0);
       appEl.classList.remove('nav-open');
@@ -64,6 +100,15 @@ export function createShell(ctx) {
 
   ctx.render = render;
   if (helpers) helpers.getCurrentRoute = () => currentRoute;
+
+  function seed() {
+    seedStore(S, ctx.persist);
+    syncMaintenanceRequests({ auth: ctx.auth, state: S, persist: ctx.persist, render });
+    syncAssets({ auth: ctx.auth, state: S, persist: ctx.persist, render, constants: { TODAY } });
+    syncNotificationsApi({ auth: ctx.auth, state: S, persist: ctx.persist, render, helpers: { updateBell, getCurrentRoute: () => currentRoute } });
+  }
+
+  if (helpers) helpers.seed = seed;
 
   const mobile = () => matchMedia('(max-width:900px)').matches;
   $('#menuBtn').onclick = () => {
@@ -132,7 +177,7 @@ export function createShell(ctx) {
   root.addEventListener('click', handleClick);
   document.addEventListener('keydown', handleKeyDown);
 
-  if (helpers?.seed) helpers.seed();
+  seed();
   render();
 
   return () => {
