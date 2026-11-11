@@ -73,3 +73,9 @@ export function closeLayers() {
   $('#ml').classList.remove('open');
   $('#modal')?.classList.remove('modal-wide');
 }
+
+export function sevIcon(kind) {
+  const m = { 'critical-risk': ['alert', 'crit'], predicted: ['trend', 'high'], overdue: ['clock', 'high'], conflict: ['alert', 'med'], delayed: ['clock', 'med'], completed: ['check', 'low'] }[kind] || ['alert', 'med'];
+  return `<span class="sev ${m[1]}">${ic(m[0], 18)}</span>`;
+}
+

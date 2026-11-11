@@ -90,6 +90,7 @@ import {
   syncAssets,
   syncNotifications as syncNotificationsApi,
 } from './lib/api';
+import { pageModules } from './pages';
 
 export default function AdminDashboard({ onLogout, user }) {
   const containerRef = useRef(null);
@@ -350,164 +351,104 @@ export default function AdminDashboard({ onLogout, user }) {
       });
     }
 
+    /* block optimization */
+    function optimize() {
+      const before = conflictPairs(S.requests).length;
+      let changed = 0;
+      const groups = {};
+      S.requests.filter((r) => r.status !== 'Completed').forEach((r) => {
+        if (r.status === 'Delayed' && r.date < TODAY) r.date = TODAY;
+        (groups[r.date] ??= []).push(r);
+      });
+      Object.values(groups).forEach((g) => {
+        const placed = g.filter((r) => r.status === 'In Progress');
+        g.filter((r) => r.status !== 'In Progress')
+          .sort((a, b) => RANK[b.pri] - RANK[a.pri] || b.dur - a.dur)
+          .forEach((r) => {
+            const cand = [...new Set([540, ...placed.map(endOf)])].sort((a, b) => a - b);
+            const ok = (s) => placed.every((p) => compat(p.dept, r.dept) || !(s < endOf(p) && tm(p.start) < s + r.dur));
+            const s = cand.find(ok) ?? Math.max(...placed.map(endOf), 540);
+            const ns = mt(s);
+            if (r.start !== ns || r.status !== 'Scheduled') changed++;
+            r.start = ns;
+            r.status = 'Scheduled';
+            placed.push(r);
+          });
+      });
+      const after = conflictPairs(S.requests).length;
+      const shared = blocksOf(S.requests).filter((b) => {
+        const d = new Set(b.tasks.map((t) => t.dept));
+        return d.size > 1 && b.tasks.some((t, i) => b.tasks.some((u, j) => i < j && overlap(t, u)));
+      }).length;
+      persist();
+      toast(`Optimized: ${changed} tasks scheduled, ${shared} shared blocks, ${before - after} conflicts resolved.`);
+    }
+
+    const ctx = {
+      root,
+      state: S,
+      persist,
+      render: (p) => render(p),
+      toast,
+      openModal,
+      openPanel,
+      closeLayers,
+      auth,
+      constants: {
+        TODAY,
+        DEPTS,
+        CATS,
+        CAT_DEPT,
+        SHORT,
+        PREFIX,
+        WORK,
+        PRI,
+        RANK,
+        MON,
+        DEPT_TAG_CLASS,
+        STORAGE_KEY,
+        NAV,
+      },
+      helpers: {
+        assetById,
+        reqById,
+        reportRows,
+        updateBell,
+        openRef,
+        optimize,
+        buildScheduleHTML,
+        wireScheduleEvents,
+        openSchedule,
+        openRequest,
+        openNewRequest,
+        openComplete,
+        openAsset,
+        confirmDelete,
+        markCompleted,
+        deleteRequest,
+        deleteAsset,
+        addNotif,
+      },
+      modals: {
+        openRequest,
+        openNewRequest,
+        openComplete,
+        openSchedule,
+        openAsset,
+        confirmDelete,
+        markCompleted,
+        deleteRequest,
+        deleteAsset,
+      },
+    };
+
     /* ---------- pages ---------- */
     const pages = {};
     const mounts = {};
-
-    pages.dashboard = () => {
-      const A = S.assets, R = S.requests;
-      const healthy = A.filter((a) => a.risk < 40).length, crit = A.filter((a) => a.risk >= 80).length, mid = A.length - healthy - crit;
-      const kp = [
-        ['Total Assets', A.length],
-        ['Open Requests', R.filter((r) => r.status !== 'Completed').length],
-        ['At-Risk Assets', mid + crit],
-        ['Predicted Failures', A.filter((a) => prob(a, 30) >= 70).length],
-        ['Active Blocks', blocksOf(R).filter((b) => b.active).length],
-        ['Completed Tasks', reportRows().filter((x) => x.done).length],
-      ];
-      const segs = [['Healthy', healthy, '#2E9E5B'], ['At Risk', mid, '#FF700F'], ['Critical', crit, '#C8372D']];
-      let cum = 0;
-      const arcs = segs.map(([l, v, c]) => {
-        const p = A.length ? (v / A.length) * 100 : 0, o = -cum;
-        cum += p;
-        return v ? `<circle cx="21" cy="21" r="15.9155" stroke="${c}" stroke-dasharray="${Math.max(p - 0.8, 0.1)} ${100 - Math.max(p - 0.8, 0.1)}" stroke-dashoffset="${o}"/>` : '';
-      }).join('');
-      const recent = [...R].sort((a, b) => b.id.localeCompare(a.id)).slice(0, 5);
-      const up = blocksOf(R).filter((b) => b.upcoming && b.date >= TODAY).slice(0, 4);
-      const al = S.notifs.filter((n) => !n.read && ['critical-risk', 'predicted', 'overdue', 'conflict', 'delayed'].includes(n.kind)).slice(0, 4);
-
-      return `<h1>Dashboard Overview</h1>
-      <div class="kpis">${kp.map((k) => kpi(...k)).join('')}</div>
-      <div class="cols">
-        <div class="stack">
-          <section class="card">
-            <h2>Asset Risk Distribution</h2>
-            <div class="donut-row">
-              <div class="donut">
-                <svg viewBox="0 0 42 42" role="img" aria-label="Asset risk distribution">
-                  <circle cx="21" cy="21" r="15.9155" stroke="var(--line2)"/>
-                  ${arcs}
-                </svg>
-                <div class="c"><b>${A.length}</b><span>Assets</span></div>
-              </div>
-              <ul class="legend">${segs.map(([l, v, c]) => `<li><i style="background:${c}"></i>${l}<b>${v}</b></li>`).join('')}</ul>
-            </div>
-          </section>
-          <section class="card flush">
-            <h2>Recent Maintenance Requests</h2>
-            <div class="tbl-wrap">
-              <table style="min-width:540px">
-                <thead><tr><th>Request</th><th>Asset</th><th>Department</th><th>Priority</th><th>Status</th></tr></thead>
-                <tbody>
-                  ${recent.length ? recent.map((r) => `<tr class="clickable" tabindex="0" data-open-req="${r.id}"><td class="id">${r.id}</td><td>${r.asset}</td><td>${SHORT[r.dept]}</td><td>${pill(r.pri)}</td><td>${pill(getRequestStatus(r))}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No recent maintenance requests.</td></tr>'}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </div>
-        <div class="stack">
-          <section class="card">
-            <h2>Upcoming Maintenance Blocks</h2>
-            ${up.length ? `<ul class="rows">${up.map((b) => `<li data-go="blocks"><div class="when"><b>${dm(b.date)}</b><span>${to12(mt(b.from))} – ${to12(mt(b.to))}</span></div><div class="t"><b>Maintenance Block</b><span class="muted small">${[...new Set(b.tasks.map((t) => SHORT[t.dept]))].join(', ')}</span></div></li>`).join('')}</ul>` : '<p class="muted">No upcoming blocks.</p>'}
-          </section>
-          <section class="card">
-            <h2>Critical Alerts</h2>
-            ${al.length ? `<ul class="rows">${al.map((n) => `<li data-alert="${n.id}">${sevIcon(n.kind)}<div class="t"><b>${esc(n.title)}</b><span class="muted small">${n.time}</span></div></li>`).join('')}</ul>` : '<p class="muted">No unread alerts.</p>'}
-          </section>
-        </div>
-      </div>`;
-    };
-
-    mounts.dashboard = () => {
-      V.querySelectorAll('[data-alert]').forEach((li) => (li.onclick = () => {
-        const n = S.notifs.find((x) => x.id === li.dataset.alert);
-        if (n) {
-          n.read = true;
-          updateBell();
-          openRef(n.ref);
-          render(true);
-        }
-      }));
-    };
-
-    /* requests */
-    pages.requests = () => {
-      const R = S.requests, f = S.ui.rq, c = (s) => R.filter((r) => getRequestStatus(r) === s).length;
-      return `<div class="ph-row">
-        <h1>Maintenance Requests</h1>
-        <div class="btn-row stretch">
-          <button class="btn" id="viewSch">View Schedule</button>
-          <button class="btn" id="optSch">Optimize Schedule</button>
-          <button class="btn primary" id="newReq">+ New Request</button>
-        </div>
-      </div>
-      <div class="toolbar">
-        <input type="search" id="rq-q" placeholder="Search by ID or asset" value="${esc(f.q)}" aria-label="Search requests">
-        <select id="rq-d" aria-label="Department">${opts(DEPTS, f.dept, 'All departments')}</select>
-        <select id="rq-p" aria-label="Priority">${opts(PRI, f.pri, 'All priorities')}</select>
-        <select id="rq-s" aria-label="Status">${opts(['Scheduled', 'In Progress', 'Completed', 'Delayed'], f.st, 'All statuses')}</select>
-      </div>
-      <div class="stats">${stat('Total', R.length)}${stat('Scheduled', c('Scheduled'))}${stat('In Progress', c('In Progress'))}${stat('Delayed', c('Delayed'))}${stat('Completed', c('Completed'))}</div>
-      <div class="card flush gap"><div class="tbl-wrap" id="rq-t"></div></div>`;
-    };
-
-    mounts.requests = () => {
-      const f = S.ui.rq;
-      const fill = () => {
-        const q = f.q.toLowerCase();
-        const rows = S.requests
-          .filter((r) => {
-            const st = getRequestStatus(r);
-            return (!f.dept || r.dept === f.dept) &&
-                   (!f.pri || r.pri === f.pri) &&
-                   (!f.st || st === f.st || r.status === f.st) &&
-                   (!q || [r.id, r.asset, r.type].join(' ').toLowerCase().includes(q));
-          })
-          .sort((a, b) => b.id.localeCompare(a.id));
-        $('#rq-t').innerHTML = `<table style="min-width:860px">
-          <thead><tr><th>Request ID</th><th>Asset</th><th>Department</th><th>Priority</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody>` +
-          (rows.length ? rows.map((r) => {
-            const rId = r.id || r._id;
-            const effectiveStatus = getRequestStatus(r);
-            const isDone = r.status === 'Completed';
-            return `<tr class="clickable" tabindex="0" data-open-req="${rId}">
-              <td class="id">${rId}</td>
-              <td>${r.asset}</td>
-              <td>${r.dept}</td>
-              <td>${pill(r.pri)}</td>
-              <td class="num">${fmtD(r.date)}</td>
-              <td>${pill(effectiveStatus)}</td>
-              <td class="req-actions-cell">
-                <div class="btn-row req-actions" style="flex-wrap:nowrap;align-items:center">
-                  ${isDone
-                    ? `<span class="done-tag" title="Completed">${ic('check', 16)}Done</span>`
-                    : `<button class="btn sm primary mark-done-btn" data-complete="${rId}" title="Mark as Done">${ic('check', 14)} Mark as Done</button>`}
-                  <button class="btn sm" data-open-req="${rId}" title="View details">View</button>
-                  <button class="btn-del-icon" data-delete-req="${rId}" title="Delete maintenance request" aria-label="Delete">${ic('trash', 16)}</button>
-                </div>
-              </td>
-            </tr>`;
-          }).join('') : `<tr><td colspan="7" class="empty">No requests match these filters.</td></tr>`) +
-          `</tbody></table>`;
-
-        $('#rq-t').querySelectorAll('[data-delete-req]').forEach((btn) => {
-          btn.onclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            deleteRequest(btn.getAttribute('data-delete-req'));
-          };
-        });
-      };
-      fill();
-      $('#rq-q').oninput = (e) => { f.q = e.target.value; fill(); };
-      $('#rq-d').onchange = (e) => { f.dept = e.target.value; fill(); };
-      $('#rq-p').onchange = (e) => { f.pri = e.target.value; fill(); };
-      $('#rq-s').onchange = (e) => { f.st = e.target.value; fill(); };
-      $('#newReq').onclick = openNewRequest;
-      $('#viewSch').onclick = () => openSchedule();
-      $('#optSch').onclick = runOptimize;
-    };
+    for (const [k, mod] of Object.entries(pageModules)) {
+      pages[k] = () => mod.render(ctx);
+      mounts[k] = () => mod.mount(ctx);
+    }
 
     function runOptimize() {
       const todo = S.requests.filter((r) => r.status === 'Pending' || r.status === 'Delayed').length, cf = conflictPairs(S.requests).length;
@@ -866,826 +807,6 @@ export default function AdminDashboard({ onLogout, user }) {
         }
       };
     }
-
-    /* assets */
-    pages.assets = () => {
-      const A = S.assets, f = S.ui.as, n = (l) => A.filter((a) => cond(a.risk) === l).length;
-      return `<div class="ph-row">
-        <h1>Asset Management</h1>
-        <button class="btn primary" id="newAsset">+ Add Asset</button>
-      </div>
-      <div class="toolbar">
-        <input type="search" id="as-q" placeholder="Search by ID" value="${esc(f.q)}" aria-label="Search assets">
-        <select id="as-c" aria-label="Category">${opts(CATS, f.cat, 'All categories')}</select>
-        <select id="as-s" aria-label="Condition">${opts(['Healthy', 'At Risk', 'Critical'], f.cond, 'All conditions')}</select>
-      </div>
-      <div class="stats">${stat('Total', A.length)}${stat('Healthy', n('Healthy'))}${stat('At Risk', n('At Risk'))}${stat('Critical', n('Critical'))}</div>
-      <div class="card flush gap"><div class="tbl-wrap" id="as-t"></div></div>`;
-    };
-
-    mounts.assets = () => {
-      const f = S.ui.as;
-      const fill = () => {
-        const q = f.q.toLowerCase();
-        const rows = S.assets.filter((a) => (!f.cat || a.type === f.cat) && (!f.cond || cond(a.risk) === f.cond) && (!q || a.id.toLowerCase().includes(q)));
-        $('#as-t').innerHTML = `<table style="min-width:760px">
-          <thead><tr><th>Asset ID</th><th>Asset Type</th><th>Age</th><th>Last Maintenance</th><th>Condition</th><th>Risk Score</th><th>Actions</th></tr></thead>
-          <tbody>` +
-          (rows.length ? rows.map((a) => {
-            const aId = a.id || a.assetId || a._id;
-            return `<tr class="clickable" tabindex="0" data-open-asset="${aId}">
-              <td class="id">${aId}</td>
-              <td>${a.type || a.category || a.assetType || 'Track'}</td>
-              <td>${a.age ?? '—'} years</td>
-              <td class="num">${fmtD(a.last || a.lastInspectionDate)}</td>
-              <td>${pill(cond(a.risk))}</td>
-              <td class="num"><b>${a.risk ?? 0}%</b></td>
-              <td>
-                <div class="btn-row" style="flex-wrap:nowrap;align-items:center">
-                  <button class="btn sm" data-open-asset="${aId}">View</button>
-                  <button class="btn-del-icon" data-delete-asset="${aId}" title="Delete asset" aria-label="Delete">${ic('trash', 16)}</button>
-                </div>
-              </td>
-            </tr>`;
-          }).join('') : `<tr><td colspan="7" class="empty">No assets match these filters.</td></tr>`) +
-          `</tbody></table>`;
-
-        $('#as-t').querySelectorAll('[data-delete-asset]').forEach((btn) => {
-          btn.onclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            deleteAsset(btn.getAttribute('data-delete-asset'));
-          };
-        });
-      };
-      fill();
-      $('#as-q').oninput = (e) => { f.q = e.target.value; fill(); };
-      $('#as-c').onchange = (e) => { f.cat = e.target.value; fill(); };
-      $('#as-s').onchange = (e) => { f.cond = e.target.value; fill(); };
-      $('#newAsset').onclick = () => {
-        const nextId = (cat) => {
-          const p = PREFIX[cat];
-          const nums = S.assets.filter((a) => a.id.startsWith(p)).map((a) => +a.id.slice(4));
-          return p + '_' + (Math.max(...nums, p === 'TRK' ? 100 : p === 'SIG' ? 200 : p === 'ELE' ? 300 : p === 'MEC' ? 400 : 500) + 1);
-        };
-        openModal(
-          'Add Asset',
-          `<form class="form" id="naf">
-            <div class="form-2">
-              ${fld('Category', `<select id="na-c">${opts(CATS, CATS[0])}</select>`)}
-              ${fld('Asset ID', `<input id="na-i" value="${nextId(CATS[0])}" required>`)}
-            </div>
-            <div class="form-2">
-              ${fld('Age (years)', `<input type="number" id="na-a" min="0" value="5" required>`)}
-              ${fld('Risk score (%)', `<input type="number" id="na-r" min="0" max="100" value="30" required>`)}
-            </div>
-            ${fld('Last maintenance', `<input type="date" id="na-m" value="${addDays(TODAY, -30)}" required>`)}
-            <div class="btn-row stretch" style="justify-content:flex-end">
-              <button class="btn" type="button" data-close>Cancel</button>
-              <button class="btn primary" type="submit">Add Asset</button>
-            </div>
-          </form>`
-        );
-        $('#na-c').onchange = (e) => { $('#na-i').value = nextId(e.target.value); };
-        $('#naf').onsubmit = async (e) => {
-          e.preventDefault();
-          const id = $('#na-i').value.trim().toUpperCase();
-          if (assetById(id)) {
-            toast(`${id} already exists`);
-            return;
-          }
-
-          const newAssetObj = {
-            assetId: id,
-            id,
-            name: `${$('#na-c').value} Asset ${id}`,
-            category: $('#na-c').value,
-            type: $('#na-c').value,
-            location: 'Main Line',
-            age: +$('#na-a').value,
-            lastInspectionDate: $('#na-m').value,
-            last: $('#na-m').value,
-            risk: clamp(+$('#na-r').value, 0, 100),
-          };
-
-          try {
-            const token = await auth?.currentUser?.getIdToken();
-            if (token) {
-              const res = await fetch('/api/assets', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${token}`,
-                },
-                body: JSON.stringify(newAssetObj),
-              });
-              if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                console.warn('Backend asset creation returned non-200:', errData?.error);
-              } else {
-                const created = await res.json().catch(() => ({}));
-                if (created?.asset) {
-                  Object.assign(newAssetObj, created.asset);
-                }
-              }
-            }
-          } catch (err) {
-            console.warn('Backend asset creation notice:', err.message);
-          }
-
-          S.assets.push(newAssetObj);
-          persist();
-          closeLayers();
-          toast(`${id} added`);
-          render(true);
-        };
-      };
-    };
-
-    /* present risk scoring */
-
-    function riskResultHTML(res) {
-      if (!res) return `<div class="result">${gauge(null)}<p class="muted">Choose a request and run the assessment.</p></div>`;
-      return `<div class="result">
-        ${gauge(res.risk, GCOL[res.cls])}
-        <div>${pill(res.cls)}</div>
-        ${factorsHTML(res.factors)}
-        <div class="note">Recommended priority: ${res.cls}. Complete within ${res.within}.</div>
-      </div>`;
-    }
-    const stepsHTML = (on) => `<div class="steps"><span class="${on >= 1 ? 'on' : ''}"><b>1</b>Existing Issue</span><span class="arr">›</span><span class="${on >= 2 ? 'on' : ''}"><b>2</b>Risk Assessment</span><span class="arr">›</span><span class="${on >= 3 ? 'on' : ''}"><b>3</b>Priority Recommendation</span></div>`;
-    function riskHistHTML() {
-      return `<table style="min-width:640px">
-        <thead><tr><th>Date</th><th>Asset</th><th>Issue</th><th>Risk</th><th>Priority</th></tr></thead>
-        <tbody>${S.riskHist.length ? S.riskHist.map((h) => `<tr><td class="num">${fmtD(h.date)}</td><td class="id">${h.asset}</td><td>${esc(h.issue)}</td><td class="num"><b>${h.risk}%</b></td><td>${pill(h.cls)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No assessment history recorded.</td></tr>'}</tbody>
-      </table>`;
-    }
-
-    pages.risk = () => {
-      const open = S.requests.filter((r) => r.status !== 'Completed');
-      const sel = S.ui.riskSel && open.find((r) => r.id === S.ui.riskSel) ? S.ui.riskSel : open[0]?.id || '';
-      S.ui.riskSel = sel;
-      const targetReq = open.find((r) => r.id === sel);
-
-      return `<div class="ph-row">
-        <h1>Present Risk Scoring</h1>
-        <span class="pill crit" style="font-size:12px;font-weight:800;display:inline-flex;align-items:center;gap:6px">${ic('alert', 14)} ML Model &amp; Datasets: Not Integrated</span>
-      </div>
-      <div class="ml-status-banner">
-        <span class="ml-status-icon">${ic('alert', 20)}</span>
-        <div class="ml-status-body">
-          <b>Machine Learning Model &amp; Datasets Not Integrated</b>
-          <p>Production ML scoring models and sensor datasets are not currently connected. Scoring values shown are rule-based heuristic calculations.</p>
-        </div>
-      </div>
-      ${stepsHTML(S.ui.riskRes ? 3 : 1)}
-      <div class="cols even">
-        <section class="card">
-          <div class="form">
-            ${fld('Asset or maintenance request', open.length ? `<select id="rk-s">${opts(open.map((r) => [r.id, `${r.id}  ${r.asset}, ${r.type}`]), sel)}</select>` : `<select id="rk-s" disabled><option>No open requests available</option></select>`)}
-            ${fld('Reported issue', `<textarea id="rk-i" placeholder="${open.length ? 'Describe defect or issue...' : 'Add a maintenance request to run risk assessments.'}" ${open.length ? '' : 'disabled'}>${esc(targetReq?.desc || '')}</textarea>`)}
-            <button class="btn primary" id="rk-run" ${open.length ? '' : 'disabled'}>Run Risk Assessment</button>
-          </div>
-        </section>
-        <section class="card" id="rk-res">${riskResultHTML(S.ui.riskRes)}</section>
-      </div>
-      <section class="card flush gap"><h2>Assessment History</h2><div class="tbl-wrap" id="rk-h">${riskHistHTML()}</div></section>`;
-    };
-
-    mounts.risk = () => {
-      animGauge();
-      $('#rk-s').onchange = (e) => {
-        S.ui.riskSel = e.target.value;
-        S.ui.riskRes = null;
-        render(true);
-      };
-      $('#rk-run').onclick = () => {
-        const r = reqById($('#rk-s').value);
-        if (!r) return;
-        const a = assetById(r.asset);
-        if (!a) return;
-        const issue = $('#rk-i').value.trim();
-        if (!issue) {
-          toast('Describe the issue first');
-          return;
-        }
-        const res = assess(a, issue);
-        S.ui.riskRes = res;
-        a.risk = res.risk;
-        r.pri = res.cls;
-        r.desc = issue;
-        S.riskHist.unshift({ date: TODAY, asset: a.id, issue, risk: res.risk, cls: res.cls });
-        persist();
-        $('#rk-res').innerHTML = riskResultHTML(res);
-        $('#rk-h').innerHTML = riskHistHTML();
-        $('.steps').outerHTML = stepsHTML(3);
-        animGauge();
-        toast(`${a.id} is now ${cond(res.risk)} at ${res.risk}%. Priority set to ${res.cls}.`);
-      };
-    };
-
-    /* future failure prediction */
-
-    function predChartHTML(a, res) {
-      if (!a) return '<p class="muted">No asset registered or selected.</p>';
-      const hz = res ? res.h : S.ui.predH;
-      return lineChart(series(a), { proj: res ? res.p : null, xl: [['Nov 2025', 0, 'l'], ['Today', res ? 82 : 100, res ? 'c' : 'r'], ...(res ? [[`+${hz} days`, 100, 'r']] : [])] });
-    }
-    function predResultHTML(a, res) {
-      if (!res) return `<div class="result"><div class="hero-num" aria-label="No prediction yet">—</div><p class="muted">${a ? 'Select an asset and run the prediction.' : 'Add an asset in Asset Management to run failure predictions.'}</p></div>`;
-      const d = daysSince(a), fails = (hash(a.id) % 3) + (a.risk >= 60 ? 2 : 0), cls = riskClass(res.p);
-      return `<div class="result">
-        <div>
-          <div class="hero-num" style="color:${cls === 'Low' ? 'var(--low)' : cls === 'Medium' ? 'var(--med)' : cls === 'High' ? 'var(--high)' : 'var(--crit)'}">${res.p}%</div>
-          <div class="muted small" style="margin-top:6px">Failure probability in ${res.h} days</div>
-        </div>
-        <div>${pill(cls)}</div>
-        ${factorsHTML([
-          { n: 'Previous failures', v: `${fails} in 24 months`, p: fails * 20 },
-          { n: 'Maintenance gap', v: d + ' days', p: d / 1.5 },
-          { n: 'Current condition', v: a.risk + '% risk', p: a.risk },
-        ])}
-      </div>`;
-    }
-
-    pages.prediction = () => {
-      const sel = S.ui.predSel && assetById(S.ui.predSel) ? S.ui.predSel : (S.assets[0]?.id || '');
-      S.ui.predSel = sel;
-      const a = assetById(sel);
-      const res = S.ui.predRes && S.ui.predRes.asset === sel ? S.ui.predRes : null;
-      return `<div class="ph-row">
-        <h1>Future Failure Prediction</h1>
-        <span class="pill crit" style="font-size:12px;font-weight:800;display:inline-flex;align-items:center;gap:6px">${ic('alert', 14)} ML Model &amp; Datasets: Not Integrated</span>
-      </div>
-      <div class="ml-status-banner">
-        <span class="ml-status-icon">${ic('alert', 20)}</span>
-        <div class="ml-status-body">
-          <b>Machine Learning Model &amp; Datasets Not Integrated</b>
-          <p>Predictive failure ML algorithms and telemetry sensor datasets are not integrated. Predictions and trend graphs are simulated based on historical heuristics.</p>
-        </div>
-      </div>
-      <section class="card gap" style="margin-top:18px">
-        <div class="form-grid">
-          ${fld('Asset', S.assets.length ? `<select id="pd-a">${opts(S.assets.map((x) => [x.id, `${x.id} (${x.type})`]), sel)}</select>` : `<select id="pd-a" disabled><option>No assets registered</option></select>`)}
-          ${fld('Time horizon', `<select id="pd-h">${opts([['30', '30 days'], ['60', '60 days'], ['90', '90 days']], String(S.ui.predH))}</select>`)}
-          <button class="btn primary" id="pd-run" ${a ? '' : 'disabled'}>Predict Failure</button>
-        </div>
-      </section>
-      <div class="cols even">
-        <section class="card" id="pd-res">${predResultHTML(a, res)}</section>
-        <section class="card"><h2>Risk Trend, Last 12 Months</h2><div id="pd-ch">${predChartHTML(a, res)}</div></section>
-      </div>
-      <section class="card flush gap">
-        <h2>Previous Predictions</h2>
-        <div class="tbl-wrap">
-          <table style="min-width:560px">
-            <thead><tr><th>Date</th><th>Asset</th><th>Horizon</th><th>Probability</th><th>Risk</th></tr></thead>
-            <tbody>${S.predHist.length ? S.predHist.map((h) => `<tr><td class="num">${fmtD(h.date)}</td><td class="id">${h.asset}</td><td>${h.h} days</td><td class="num"><b>${h.p}%</b></td><td>${pill(riskClass(h.p))}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No previous predictions recorded.</td></tr>'}</tbody>
-          </table>
-        </div>
-      </section>`;
-    };
-
-    mounts.prediction = () => {
-      $('#pd-a').onchange = (e) => { S.ui.predSel = e.target.value; S.ui.predRes = null; render(true); };
-      $('#pd-h').onchange = (e) => { S.ui.predH = +e.target.value; };
-      $('#pd-run').onclick = () => {
-        const a = assetById($('#pd-a').value);
-        if (!a) return;
-        const h = +$('#pd-h').value, p = prob(a, h);
-        S.ui.predRes = { asset: a.id, h, p };
-        S.ui.predH = h;
-        S.predHist.unshift({ date: TODAY, asset: a.id, h, p });
-        if (p >= 70 && !S.notifs.some((n) => n.kind === 'predicted' && n.ref.id === a.id && !n.read)) {
-          addNotif('predicted', `High failure probability for ${a.id}`, `${p}% chance of failure within ${h} days.`, { t: 'asset', id: a.id });
-        }
-        persist();
-        toast(`${a.id}: ${p}% failure probability in ${h} days`);
-        render(true);
-      };
-    };
-
-    /* block optimization */
-    function optimize() {
-      const before = conflictPairs(S.requests).length;
-      let changed = 0;
-      const groups = {};
-      S.requests.filter((r) => r.status !== 'Completed').forEach((r) => {
-        if (r.status === 'Delayed' && r.date < TODAY) r.date = TODAY;
-        (groups[r.date] ??= []).push(r);
-      });
-      Object.values(groups).forEach((g) => {
-        const placed = g.filter((r) => r.status === 'In Progress');
-        g.filter((r) => r.status !== 'In Progress')
-          .sort((a, b) => RANK[b.pri] - RANK[a.pri] || b.dur - a.dur)
-          .forEach((r) => {
-            const cand = [...new Set([540, ...placed.map(endOf)])].sort((a, b) => a - b);
-            const ok = (s) => placed.every((p) => compat(p.dept, r.dept) || !(s < endOf(p) && tm(p.start) < s + r.dur));
-            const s = cand.find(ok) ?? Math.max(...placed.map(endOf), 540);
-            const ns = mt(s);
-            if (r.start !== ns || r.status !== 'Scheduled') changed++;
-            r.start = ns;
-            r.status = 'Scheduled';
-            placed.push(r);
-          });
-      });
-      const after = conflictPairs(S.requests).length;
-      const shared = blocksOf(S.requests).filter((b) => {
-        const d = new Set(b.tasks.map((t) => t.dept));
-        return d.size > 1 && b.tasks.some((t, i) => b.tasks.some((u, j) => i < j && overlap(t, u)));
-      }).length;
-      persist();
-      toast(`Optimized: ${changed} tasks scheduled, ${shared} shared blocks, ${before - after} conflicts resolved.`);
-    }
-
-    function laneHTML(name, items, s0, span) {
-      const rows = [];
-      items.sort((a, b) => a.s - b.s).forEach((it) => {
-        let k = rows.findIndex((e) => e <= it.s);
-        if (k < 0) {
-          k = rows.length;
-          rows.push(0);
-        }
-        rows[k] = it.e;
-        it.row = k;
-      });
-      const h = rows.length * 62 + 8;
-      return `<div class="lane">
-        <div class="lane-name">${name}</div>
-        <div class="lane-track" style="height:${h}px;background-size:${(60 / span) * 100}% 100%">
-          ${items.map((it) => `<div class="bar ${it.cls}" ${it.attr || ''} title="${esc(it.tip)}" style="left:${((it.s - s0) / span) * 100}%;width:${((it.e - it.s) / span) * 100}%;top:${4 + it.row * 62}px;height:${it.bh || 56}px">${it.html}</div>`).join('')}
-        </div>
-      </div>`;
-    }
-
-    pages.blocks = () => {
-      const f = S.ui, list = S.requests.filter((r) => r.date === f.bd && (!f.bdept || r.dept === f.bdept));
-      const bl = blocksOf(list), cf = conflictPairs(list), cids = new Set(cf.flat().map((r) => r.id));
-      const T = list.filter((r) => r.start);
-      let s0 = 480, e0 = 780;
-      T.forEach((r) => {
-        e0 = Math.max(e0, Math.ceil(endOf(r) / 60) * 60);
-        s0 = Math.min(s0, Math.floor(tm(r.start) / 60) * 60);
-      });
-      const span = Math.max(60, e0 - s0), hrs = span / 60;
-      const stCls = { 'In Progress': 's-prog', Completed: 's-done', Delayed: 's-delay' };
-      const lanes = [
-        laneHTML('Blocks', bl.map((b) => ({
-          s: b.from, e: b.to, cls: 'blk' + (b.tasks.some((t) => cids.has(t.id)) ? ' conf' : ''), bh: 48,
-          tip: `${to12(mt(b.from))} – ${to12(mt(b.to))}`,
-          html: `<b>Maintenance Block</b><span>${to12(mt(b.from))} – ${to12(mt(b.to))}, ${b.tasks.length} task${b.tasks.length > 1 ? 's' : ''}</span>`,
-        })), s0, span),
-      ].concat(
-        (f.bdept ? [f.bdept] : DEPTS).map((d) => laneHTML(d, T.filter((r) => r.dept === d).map((r) => ({
-          s: tm(r.start), e: endOf(r), cls: (stCls[r.status] || '') + (cids.has(r.id) ? ' conf' : ''), attr: `data-open-req="${r.id}"`,
-          tip: `${r.id}, ${r.type}`,
-          html: `<b>${esc(r.type)}</b><span>${timeRange12(r.start, r.dur)}</span><span>${r.status}${cids.has(r.id) ? ', conflict' : ''}</span>`,
-        })), s0, span))
-      );
-
-      return `<div class="ph-row">
-        <h1>Block Optimization</h1>
-        <div class="btn-row">
-          <button class="btn" id="bk-view-sch-modal">View Detailed Schedule</button>
-          <button class="btn primary" id="bk-run">Run Optimization</button>
-        </div>
-      </div>
-      <div class="toolbar">
-        <input type="date" id="bk-d" value="${f.bd}" aria-label="Date">
-        <select id="bk-p" aria-label="Department">${opts(DEPTS, f.bdept, 'All departments')}</select>
-      </div>
-      <div class="stats three">${stat('Upcoming Blocks', bl.filter((b) => b.upcoming).length)}${stat('Active Blocks', bl.filter((b) => b.active).length)}${stat('Conflicts', cf.length)}</div>
-      <section class="card flush gap">
-        <div class="ph-row" style="padding: 18px 22px 0">
-          <h2 style="margin:0">Schedule for ${fmtD(f.bd)}</h2>
-          <span class="muted small">Timeline (12-Hour AM/PM)</span>
-        </div>
-        <div class="tl" style="margin-top:12px">
-          <div class="tl-in" style="min-width:${150 + span * 2.7}px">
-            <div class="axis"><div></div><div class="hrs">${Array.from({ length: hrs }, (_, i) => `<span>${to12(mt(s0 + i * 60))}</span>`).join('')}</div></div>
-            ${lanes.join('')}
-          </div>
-        </div>
-        <div class="legend-note">Track and Signal work can share one block. Other departments cannot overlap during the same time window.</div>
-      </section>
-      <section class="card flush gap">
-        <div class="ph-row" style="padding: 18px 22px 0">
-          <h2 style="margin:0">Requests</h2>
-        </div>
-        <div class="tbl-wrap">
-          <table style="min-width:680px">
-            <thead><tr><th>Request ID</th><th>Department</th><th>Scheduled Window</th><th>Duration</th><th>Status</th></tr></thead>
-            <tbody>
-              ${list.length ? list.sort((a, b) => (a.start || '99').localeCompare(b.start || '99')).map((r) => `<tr>
-                <td class="id"><a href="#blocks" data-open-req="${r.id}" style="color:inherit">${r.id}</a></td>
-                <td>${r.dept}</td>
-                <td>${r.start ? `<b>${timeRange12(r.start, r.dur)}</b>` : '<span class="muted">Pending schedule</span>'}</td>
-                <td class="num">${fmtDur(r.dur)}</td>
-                <td>${r.start ? `<select class="st" data-st="${r.id}" aria-label="Status for ${r.id}">${opts(['Scheduled', 'In Progress', 'Completed', 'Delayed'], r.status)}</select>` : pill('Pending')}</td>
-              </tr>`).join('') : `<tr><td colspan="5" class="empty">No work planned for this date.</td></tr>`}
-            </tbody>
-          </table>
-        </div>
-      </section>`;
-    };
-
-    mounts.blocks = () => {
-      const bkd = $('#bk-d');
-      if (bkd) {
-        const onBkDate = (e) => {
-          if (e.target.value && e.target.value !== S.ui.bd) {
-            S.ui.bd = e.target.value;
-            render(true);
-          }
-        };
-        bkd.onchange = onBkDate;
-        bkd.oninput = onBkDate;
-      }
-      $('#bk-p').onchange = (e) => { S.ui.bdept = e.target.value; render(true); };
-      $('#bk-run').onclick = () => { optimize(); render(true); };
-      $('#bk-view-sch-modal')?.addEventListener('click', () => openSchedule(S.ui.bd, S.ui.bdept));
-      V.querySelectorAll('[data-st]').forEach((s) => (s.onchange = async (e) => {
-        const r = reqById(s.dataset.st), v = e.target.value;
-        const prevStatus = r.status;
-        if (v === 'Completed') {
-          openComplete(r.id);
-          render(true);
-          return;
-        }
-
-        try {
-          const token = await auth?.currentUser?.getIdToken();
-          if (token) {
-            const res = await fetch(`/api/maintenance-requests/${r.id}/status`, {
-              method: 'PATCH',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({ status: v }),
-            });
-            if (!res.ok) {
-              const errData = await res.json().catch(() => ({}));
-              throw new Error(errData?.error || `HTTP ${res.status}`);
-            }
-          }
-
-          r.status = v;
-          if (v === 'Delayed') addNotif('delayed', `${r.id} is delayed`, `${r.type} on ${r.asset} did not finish on schedule.`, { t: 'request', id: r.id });
-          persist();
-          toast(`${r.id} marked ${v} in MongoDB.`);
-          render(true);
-        } catch (err) {
-          console.error('Failed to update status in MongoDB Atlas:', err);
-          toast(`Failed to update status: ${err.message}`);
-          s.value = prevStatus;
-        }
-      }));
-      V.querySelectorAll('a[data-open-req]').forEach((a) => a.addEventListener('click', (e) => e.preventDefault()));
-    };
-
-    /* what-if simulator (PREDICTION ONLY - NO APPLY BUTTON) */
-    const whatIfCalc = (r, prop, assump) => domainWhatIfCalc(r, prop, assump, { state: S, helpers: { assetById } });
-
-    pages.whatif = () => {
-      const cand = S.requests.filter((r) => r.start && r.status !== 'Completed'), w = S.ui.wi;
-      if (!w.id || !cand.find((r) => r.id === w.id)) {
-        w.id = cand[0]?.id || '';
-        w.prop = null;
-        w.sim = null;
-      }
-      const r = reqById(w.id), a = r ? assetById(r.asset) : null;
-      if (r && w.prop == null) w.prop = r.dur + 30;
-      const sm = w.sim;
-      const delta = (v, u) => (v === 0 ? '' : ` <span style="color:${v > 0 ? 'var(--crit)' : 'var(--low)'}">(${v > 0 ? '+' : ''}${v}${u})</span>`);
-
-      return `<div class="ph-row">
-        <h1>What-If Simulator</h1>
-        <span class="pill crit" style="font-size:12px;font-weight:800;display:inline-flex;align-items:center;gap:6px">${ic('alert', 14)} ML Model &amp; Datasets: Not Integrated</span>
-      </div>
-      <div class="ml-status-banner">
-        <span class="ml-status-icon">${ic('alert', 20)}</span>
-        <div class="ml-status-body">
-          <b>Machine Learning Model &amp; Datasets Not Integrated</b>
-          <p>What-if disruption prediction models and historical delay datasets are not connected. Scenario impacts are calculated using baseline rule estimates.</p>
-        </div>
-      </div>
-      <section class="card gap" style="margin-top:18px">
-        <div class="form-grid">
-          ${fld('Maintenance request', cand.length ? `<select id="wi-r">${opts(cand.map((x) => [x.id, `${x.id}  ${x.type}`]), w.id)}</select>` : `<select id="wi-r" disabled><option>No scheduled requests</option></select>`)}
-          ${fld('Original duration', `<input value="${r ? r.dur + ' min' : '—'}" readonly aria-readonly="true">`)}
-          ${fld('Proposed duration (minutes)', `<input type="number" id="wi-p" min="10" step="5" value="${w.prop || 60}" ${r ? '' : 'disabled'}>`)}
-          ${fld('Risk assumption (optional)', `<select id="wi-a" ${r ? '' : 'disabled'}>${opts([['none', 'No assumption'], ['worse', 'Defect is worse than reported'], ['minor', 'Defect is minor']], w.assump)}</select>`)}
-        </div>
-        <div class="btn-row stretch" style="margin-top:16px">
-          <button class="btn primary" id="wi-sim" ${r ? '' : 'disabled'}>Simulate Scenario</button>
-          <button class="btn" id="wi-reset">Reset</button>
-        </div>
-      </section>
-      <div class="cols even">
-        <section class="card">
-          <h2>Original Plan</h2>
-          ${r && a ? dl([['Duration', r.dur + ' min'], ['Risk', a.risk + '%'], ['Conflicts', String(conflictPairs(S.requests).filter((p) => p.includes(r)).length)], ['Disruption', 'Baseline']]) : '<p class="muted">No scheduled requests available to simulate.</p>'}
-        </section>
-        <section class="card">
-          <div class="ph-row" style="margin-bottom:14px">
-            <h2 style="margin:0">Simulated Plan</h2>
-            <span class="demo">Simulated prediction results</span>
-          </div>
-          ${sm ? dl([
-            ['Duration', `${sm.prop} min${delta(sm.extra, ' min')}`],
-            ['Risk', `${sm.risk}%${delta(sm.risk - sm.orig, '')}`],
-            ['Conflicts', `${sm.conflicts}${delta(sm.conflicts - sm.base, '')}`],
-            ['Disruption', `${sm.dis}${sm.trains > 0 ? `, about ${sm.trains} train${sm.trains > 1 ? 's' : ''} delayed` : ''}`],
-          ]) +
-          (sm.hit.length ? `<div class="note" style="margin-top:16px">Work would end at ${sm.end} and overlap ${sm.hit.map((p) => p.find((x) => x.id !== r.id && x.id !== undefined && x.start)?.id).filter(Boolean).join(', ')}.</div>` : '')
-          : `<p class="muted">${r ? 'Set a proposed duration and click Simulate Scenario to predict impact.' : 'Schedule a maintenance request first to simulate scenarios.'}</p>`}
-        </section>
-      </div>`;
-    };
-
-    mounts.whatif = () => {
-      const w = S.ui.wi;
-      $('#wi-r').onchange = (e) => { w.id = e.target.value; w.prop = null; w.sim = null; render(true); };
-      $('#wi-p').oninput = (e) => { w.prop = +e.target.value; };
-      $('#wi-a').onchange = (e) => { w.assump = e.target.value; };
-      $('#wi-sim').onclick = () => {
-        const r = reqById(w.id);
-        if (!r) return;
-        const p = clamp(Math.round(+$('#wi-p').value || r.dur), 10, 600);
-        w.prop = p;
-        w.sim = { ...whatIfCalc(r, p, w.assump), prop: p };
-        render(true);
-      };
-      $('#wi-reset').onclick = () => { w.prop = null; w.assump = 'none'; w.sim = null; render(true); };
-    };
-
-    /* reports */
-    const monthsBetween = (f, t) => {
-      const o = [];
-      let [y, m] = f.slice(0, 7).split('-').map(Number);
-      const [ty, tmo] = t.slice(0, 7).split('-').map(Number);
-      while ((y < ty || (y === ty && m <= tmo)) && o.length < 12) {
-        o.push(`${y}-${String(m).padStart(2, '0')}`);
-        m++;
-        if (m > 12) {
-          m = 1;
-          y++;
-        }
-      }
-      return o;
-    };
-    /* reports */
-    const fetchReportsData = () => fetchReportsDataApi({ auth, state: S, render });
-
-    function repRows() {
-      const { from, to, dept } = S.ui.rp;
-      return S.requests
-        .filter((r) => {
-          const d = r.doneDate || r.date;
-          if (from && d < from) return false;
-          if (to && d > to) return false;
-          if (dept && r.dept !== dept) return false;
-          return r.status === 'Completed' || (r.date < TODAY);
-        })
-        .map((r) => ({
-          id: r.id,
-          asset: r.asset,
-          dept: r.dept,
-          date: r.status === 'Completed' ? (r.doneDate || r.date) : r.date,
-          dur: r.status === 'Completed' ? (r.actual ?? r.dur) : r.dur,
-          done: r.status === 'Completed',
-        }))
-        .sort((a, b) => b.date.localeCompare(a.date));
-    }
-
-    pages.reports = () => {
-      const f = S.ui.rp;
-      if (!S.rpData && !isFetchingReports) {
-        fetchReportsData();
-      }
-
-      const rows = repRows();
-      const doneRows = rows.filter((r) => r.done);
-      const overRows = rows.filter((r) => !r.done);
-
-      // Prefer real API overview if available, fallback to local dataset
-      const completedCount = S.rpData?.overview?.completedRequests ?? doneRows.length;
-      const overdueCount = S.rpData?.overview?.overdueRequests ?? overRows.length;
-      const avgDurationStr = S.rpData?.overview?.avgActualDuration != null
-        ? `${S.rpData.overview.avgActualDuration} min`
-        : (doneRows.length ? `${Math.round(doneRows.reduce((s, r) => s + (r.dur || 0), 0) / doneRows.length)} min` : '—');
-
-      // Trends data from real API
-      const trendItems = S.rpData?.trends?.trends || [];
-      const trLabels = trendItems.map((t) => t.monthLabel.split(' ')[0]);
-      const trCompleted = trendItems.map((t) => t.completedRequests);
-      const trOverdue = trendItems.map((t) => t.overdueRequests);
-
-      // Department performance from real API
-      const deptItems = S.rpData?.departments?.departments || DEPTS.map((d) => {
-        const dd = rows.filter((r) => r.dept === d);
-        const c = dd.filter((r) => r.done).length;
-        return {
-          department: d,
-          totalRequests: dd.length,
-          completedRequests: c,
-          completionRate: dd.length ? Math.round((c / dd.length) * 100) : 0,
-        };
-      });
-
-      return `<div class="ph-row">
-        <h1>Reports &amp; Analytics</h1>
-      </div>
-      <div class="toolbar">
-        <input type="date" id="rp-f" value="${f.from}" aria-label="From date">
-        <input type="date" id="rp-t" value="${f.to}" aria-label="To date">
-        <select id="rp-d" aria-label="Department">${opts(DEPTS, f.dept, 'All departments')}</select>
-      </div>
-      <div class="stats three">
-        ${stat('Completed Tasks', completedCount)}
-        ${stat('Average Completion Time', avgDurationStr)}
-        ${stat('Overdue Tasks', overdueCount)}
-      </div>
-      ${(trendItems.length || rows.length) ? `<div class="cols even gap" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))">
-        <section class="card">
-          <h2>Maintenance Completion Trends</h2>
-          ${trendItems.length ? barChart(trLabels, trCompleted) : '<div class="empty small">No completion data</div>'}
-        </section>
-        <section class="card">
-          <h2>Overdue Work Trends</h2>
-          ${trendItems.length ? barChart(trLabels, trOverdue) : '<div class="empty small">No overdue trends</div>'}
-        </section>
-        <section class="card">
-          <h2>Department Performance</h2>
-          <div class="hb">
-            ${deptItems.map((d) => {
-              const name = SHORT[d.department] || d.department;
-              const rate = d.completionRate;
-              const isZero = d.totalRequests === 0;
-              return `<div class="r">
-                <b>${name}</b>
-                <span>${isZero ? 'No tasks' : `${rate}% (${d.completedRequests}/${d.totalRequests})`}</span>
-                <div class="meter"><i style="width:${isZero ? 0 : rate}%"></i></div>
-              </div>`;
-            }).join('')}
-          </div>
-        </section>
-      </div>` : `<div class="card gap empty">No records found for the selected range.</div>`}
-      <section class="card flush gap">
-        <div class="ph-row" style="padding:18px 20px 0">
-          <h2 style="margin:0">Completed and Overdue Work</h2>
-          <button class="btn sm" id="rp-csv">${ic('download', 16)}Export CSV</button>
-        </div>
-        <div class="tbl-wrap" style="margin-top:12px">
-          <table style="min-width:680px">
-            <thead><tr><th>Request ID</th><th>Asset</th><th>Department</th><th>Completion Date</th><th>Duration</th><th>Status</th></tr></thead>
-            <tbody>
-              ${rows.length ? rows.slice(0, 40).map((r) => `<tr>
-                <td class="id">${r.id}</td>
-                <td>${r.asset}</td>
-                <td>${r.dept}</td>
-                <td class="num">${r.done ? fmtD(r.date) : '—'}</td>
-                <td class="num">${r.done ? (r.dur ? r.dur + ' min' : '—') : '—'}</td>
-                <td>${pill(r.done ? 'Completed' : 'Overdue')}</td>
-              </tr>`).join('') : `<tr><td colspan="6" class="empty">No work in this range.</td></tr>`}
-            </tbody>
-          </table>
-        </div>
-      </section>`;
-    };
-
-    mounts.reports = () => {
-      const f = S.ui.rp;
-      const rpf = $('#rp-f');
-      if (rpf) {
-        const updateFrom = (e) => {
-          if (e.target.value && e.target.value !== f.from) {
-            f.from = e.target.value;
-            S.rpData = null;
-            fetchReportsData();
-          }
-        };
-        rpf.onchange = updateFrom;
-        rpf.oninput = updateFrom;
-      }
-      const rpt = $('#rp-t');
-      if (rpt) {
-        const updateTo = (e) => {
-          if (e.target.value && e.target.value !== f.to) {
-            f.to = e.target.value;
-            S.rpData = null;
-            fetchReportsData();
-          }
-        };
-        rpt.onchange = updateTo;
-        rpt.oninput = updateTo;
-      }
-      const rpd = $('#rp-d');
-      if (rpd) {
-        rpd.onchange = (e) => {
-          f.dept = e.target.value;
-          S.rpData = null;
-          fetchReportsData();
-        };
-      }
-      const rpCsv = $('#rp-csv');
-      if (rpCsv) {
-        rpCsv.onclick = () => {
-          const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-          const csv = [['Request ID', 'Asset', 'Department', 'Completion Date', 'Duration (min)', 'Status'].map(q).join(',')].concat(
-            repRows().map((r) => [r.id, r.asset, r.dept, r.done ? fmtD(r.date) : '', r.done ? r.dur : '', r.done ? 'Completed' : 'Overdue'].map(q).join(','))
-          ).join('\n');
-          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'railmaint-report.csv';
-          a.click();
-          URL.revokeObjectURL(url);
-          toast('Report exported to CSV');
-        };
-      }
-    };
-
-    /* notifications */
-    pages.notifications = () => {
-      const N = S.notifs, un = N.filter((n) => !n.read).length, list = S.ui.nf === 'unread' ? N.filter((n) => !n.read) : N;
-      return `<div class="ph-row">
-        <h1>Notifications</h1>
-        <button class="btn" id="nf-all" ${un ? '' : 'disabled'}>Mark All as Read</button>
-      </div>
-      <div class="seg" role="group" aria-label="Filter">
-        <button data-nf="all" class="${S.ui.nf === 'all' ? 'on' : ''}">All</button>
-        <button data-nf="unread" class="${S.ui.nf === 'unread' ? 'on' : ''}">Unread (${un})</button>
-      </div>
-      <div class="card flush">
-        <ul class="nflist">
-          ${list.length ? list.map((n) => `<li class="nf ${n.read ? '' : 'unread'}" data-n="${n.id}" tabindex="0">
-            ${sevIcon(n.kind)}
-            <div class="body">
-              <div class="ti">${esc(n.title)}</div>
-              <div class="ds">${esc(n.desc)}</div>
-              <div class="meta"><span>${n.time}</span><span class="chip">${n.ref.id}</span></div>
-            </div>
-            ${n.read ? '' : `<div class="act"><button class="btn sm" data-mark="${n.id}">Mark as Read</button></div>`}
-          </li>`).join('') : `<li class="empty">No unread notifications.</li>`}
-        </ul>
-      </div>`;
-    };
-
-    mounts.notifications = () => {
-      V.querySelectorAll('[data-nf]').forEach((b) => (b.onclick = () => { S.ui.nf = b.dataset.nf; render(true); }));
-      const markAllBtn = $('#nf-all');
-      if (markAllBtn) {
-        markAllBtn.onclick = async () => {
-          S.notifs.forEach((n) => (n.read = true));
-          persist();
-          updateBell();
-          render(true);
-          try {
-            const token = await auth?.currentUser?.getIdToken();
-            if (token) {
-              await fetch('/api/notifications/mark-all-read', {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` },
-              });
-            }
-          } catch (e) {
-            console.warn('Mark all read notice:', e.message);
-          }
-        };
-      }
-      V.querySelectorAll('.nf').forEach((li) => (li.onclick = async (e) => {
-        const n = S.notifs.find((x) => x.id === li.dataset.n);
-        if (!n) return;
-        const markOnly = e.target.closest('[data-mark]');
-        if (!n.read) {
-          n.read = true;
-          persist();
-          updateBell();
-          try {
-            const token = await auth?.currentUser?.getIdToken();
-            if (token) {
-              await fetch(`/api/notifications/${n.id}/read`, {
-                method: 'PATCH',
-                headers: { Authorization: `Bearer ${token}` },
-              });
-            }
-          } catch (err) {
-            console.warn('Mark read notice:', err.message);
-          }
-        }
-        if (markOnly) {
-          render(true);
-          return;
-        }
-        if (n.ref) {
-          openRef(n.ref);
-        }
-        render(true);
-      }));
-    };
 
     /* ---------- shell ---------- */
 
